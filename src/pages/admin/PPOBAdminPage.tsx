@@ -86,7 +86,7 @@ export default function PPOBAdminPage() {
       const fetchDigiflazzProducts = async () => {
         setIsLoading(true);
         try {
-          const functionUrl = 'https://jayaperkasacharcoal.co-id.id/api/digiflazz-proxy';
+          const functionUrl = 'https://202.10.44.157:8080/netlify/functions/digiflazz-proxy';
           const response = await fetch(functionUrl, {
             method: 'POST',
             headers: {
