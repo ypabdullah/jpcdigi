@@ -1,0 +1,121 @@
+/* Styling untuk struk belanja */
+
+.receipt-container {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  color: #333;
+  padding: 1.5rem;
+  background-color: #fff;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.receipt-header {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.receipt-title {
+  font-size: 1.25rem;
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+}
+
+.receipt-store-info {
+  font-size: 0.875rem;
+  color: #555;
+  margin-bottom: 0.5rem;
+}
+
+.receipt-store-name {
+  font-weight: bold;
+  font-size: 1rem;
+  color: #333;
+}
+
+.receipt-border {
+  border-top: 1px dashed #ccc;
+  margin: 0.75rem 0;
+}
+
+.receipt-customer-info {
+  font-size: 0.875rem;
+  color: #555;
+  margin-bottom: 0.75rem;
+}
+
+.receipt-items-container {
+  margin: 0.75rem 0;
+}
+
+.receipt-item {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+  padding: 0.25rem 0;
+  font-size: 0.875rem;
+}
+
+.receipt-item p {
+  margin: 0.125rem 0;
+}
+
+.receipt-summary {
+  margin-top: 1rem;
+  font-size: 0.875rem;
+}
+
+.receipt-summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+}
+
+.receipt-total {
+  font-weight: bold;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid #ddd;
+}
+
+.receipt-payment-info {
+  margin-top: 0.75rem;
+  font-size: 0.875rem;
+  color: #555;
+}
+
+.receipt-barcode {
+  text-align: center;
+  margin: 1rem 0;
+  font-size: 0.875rem;
+  letter-spacing: 2px;
+}
+
+.receipt-thank-you {
+  text-align: center;
+  margin: 1rem 0;
+  font-weight: bold;
+  font-size: 0.875rem;
+}
+
+.receipt-footer {
+  text-align: center;
+  font-size: 0.75rem;
+  color: #777;
+  margin-top: 1rem;
+}
+
+/* Responsive styling */
+@media print {
+  .receipt-container {
+    box-shadow: none;
+    padding: 0;
+  }
+  
+  .hidden-on-print {
+    display: none !important;
+  }
+}

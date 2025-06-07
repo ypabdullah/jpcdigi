@@ -1,0 +1,12 @@
+{
+  "name": "supabase-scripts",
+  "version": "1.0.0",
+  "description": "Scripts for managing Supabase data",
+  "main": "index.js",
+  "scripts": {
+    "insert-telkomsel": "node insert-telkomsel-products.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.7"
+  }
+}
