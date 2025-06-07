@@ -2,7 +2,7 @@ import axios from 'axios';
 import config from '@/config/config';
 
 // Digiflazz API Configuration from config
-const API_PROXY_URL = 'https://jayaperkasacharcoal.co-id.id/api/digiflazz-proxy';
+const API_PROXY_URL = 'https://202.10.44.157:8080/netlify/functions/digiflazz-proxy';
 const BUYER_SKU_CODE_PREFIX = config.app.transactionPrefix;
 
 // Note: DIGIFLAZZ_USERNAME and DIGIFLAZZ_API_KEY are now handled securely in the backend proxy

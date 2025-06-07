@@ -8,7 +8,7 @@ const port = process.env.PORT || 3000;
 app.use(express.json());
 
 // Digiflazz API base URL
-const DIGIFLAZZ_BASE_URL = 'https://52.74.250.133';
+const DIGIFLAZZ_BASE_URL = 'https://api.digiflazz.com';
 
 // Replace these with your actual Digiflazz credentials
 const DIGIFLAZZ_USERNAME = process.env.DIGIFLAZZ_USERNAME || 'vatuviWmrQGg';
