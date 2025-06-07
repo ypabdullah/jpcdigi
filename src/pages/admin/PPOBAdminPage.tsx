@@ -331,13 +331,14 @@ export default function PPOBAdminPage() {
         },
         body: JSON.stringify({
           username: digiflazzConfig.username,
-          apiKey: digiflazzConfig.api_key,
+          apikey: digiflazzConfig.api_key, // ✅ betul: 'apikey', semua huruf kecil
           sku: selectedProduct,
           customer_no: customerNo,
           ref_id: refId,
-          sign: sign, // Sending MD5 hashed signature
+          sign: sign,
           cmd: 'pay-pasca'
-        }),
+        })
+        
       });
 
       const responseText = await response.text();
