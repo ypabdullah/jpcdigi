@@ -26,7 +26,6 @@ import { supabase } from '../../integrations/supabase/client';
 import { PPOBService, PPOBProduct, PPOBTransaction } from '../../integrations/supabase/ppob-types';
 import { getPPOBServices, getPPOBProducts, getPPOBTransactions } from '../../services/ppobService';
 
-
 export default function PPOBAdminPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -313,10 +312,17 @@ export default function PPOBAdminPage() {
     setIsLoading(true);
     try {
       const refId = `TEST_${Date.now()}`;
-      // Generate signature for Digiflazz API
-      const sign = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
-      // You may need to use an MD5 hash function here if required by the API
-      // For now, we'll send it as is if the API accepts it, or adjust based on documentation
+      // Generate signature for Digiflazz API with MD5 hashing
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
+      // Creating MD5 hash for the signature
+      const sign = await crypto.subtle.digest(
+        "MD5",
+        new TextEncoder().encode(signRaw)
+      ).then(hash => {
+        return Array.from(new Uint8Array(hash))
+          .map(b => b.toString(16).padStart(2, "0"))
+          .join("");
+      });
       console.log('Test Purchase Request:', { sku: selectedProduct, customer_no: customerNo, ref_id: refId, sign });
       const response = await fetch('/digiflazz-proxy/v1/transaction', {
         method: 'POST',
@@ -329,7 +335,7 @@ export default function PPOBAdminPage() {
           sku: selectedProduct,
           customer_no: customerNo,
           ref_id: refId,
-          sign: sign, // Adding signature to the request
+          sign: sign, // Sending MD5 hashed signature
           cmd: 'pay-pasca'
         }),
       });
