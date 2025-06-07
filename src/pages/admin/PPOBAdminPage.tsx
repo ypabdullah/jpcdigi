@@ -313,7 +313,11 @@ export default function PPOBAdminPage() {
     setIsLoading(true);
     try {
       const refId = `TEST_${Date.now()}`;
-      console.log('Test Purchase Request:', { sku: selectedProduct, customer_no: customerNo, ref_id: refId });
+      // Generate signature for Digiflazz API
+      const sign = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
+      // You may need to use an MD5 hash function here if required by the API
+      // For now, we'll send it as is if the API accepts it, or adjust based on documentation
+      console.log('Test Purchase Request:', { sku: selectedProduct, customer_no: customerNo, ref_id: refId, sign });
       const response = await fetch('/digiflazz-proxy/v1/transaction', {
         method: 'POST',
         headers: {
@@ -325,6 +329,7 @@ export default function PPOBAdminPage() {
           sku: selectedProduct,
           customer_no: customerNo,
           ref_id: refId,
+          sign: sign, // Adding signature to the request
           cmd: 'pay-pasca'
         }),
       });
