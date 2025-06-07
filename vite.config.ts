@@ -6,13 +6,18 @@ import { componentTagger } from "lovable-tagger";
 export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
-    port: 8080,
+    port: 5173,
     proxy: {
       '/api': {
         target: 'http://localhost:8888/.netlify/functions',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '/digiflazz-proxy'),
       },
+      '/digiflazz-proxy': {
+        target: 'https://api.digiflazz.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/digiflazz-proxy/, '')
+      }
     },
   },
   plugins: [

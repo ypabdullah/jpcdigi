@@ -44,6 +44,8 @@ export default function PPOBAdminPage() {
     id: '', name: '', category: 'Top Up', icon: '', color: '', icon_color: '', route: '', is_new: false, price: 0, description: '', service_id: '',
     api_key: '', username: '', mode: 'development'
   });
+  const [selectedProduct, setSelectedProduct] = useState<string>('');
+  const [customerNo, setCustomerNo] = useState<string>('');
 
   useEffect(() => {
     const loadData = async () => {
@@ -86,7 +88,7 @@ export default function PPOBAdminPage() {
       const fetchDigiflazzProducts = async () => {
         setIsLoading(true);
         try {
-          const functionUrl = 'https://202.10.44.157:8080/netlify/functions/digiflazz-proxy';
+          const functionUrl = '/digiflazz-proxy/v1/price-list';
           const response = await fetch(functionUrl, {
             method: 'POST',
             headers: {
@@ -302,6 +304,52 @@ export default function PPOBAdminPage() {
     { title: "Produk Terjual", value: products.length.toString(), change: "+10.1%", icon: <Icons.shoppingCart className="h-5 w-5" /> },
   ];
 
+  const handleTestPurchase = async () => {
+    if (!selectedProduct || !customerNo) {
+      alert('Mohon pilih produk dan masukkan nomor pelanggan.');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const refId = `TEST_${Date.now()}`;
+      console.log('Test Purchase Request:', { sku: selectedProduct, customer_no: customerNo, ref_id: refId });
+      const response = await fetch('/digiflazz-proxy/v1/transaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: digiflazzConfig.username,
+          apiKey: digiflazzConfig.api_key,
+          sku: selectedProduct,
+          customer_no: customerNo,
+          ref_id: refId,
+          cmd: 'pay-pasca'
+        }),
+      });
+
+      const responseText = await response.text();
+      console.log('Test Purchase Response:', response.status, responseText);
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}, Details: ${responseText}`);
+      }
+
+      const data = JSON.parse(responseText);
+      if (data && data.data) {
+        alert(`Pembelian berhasil! Status: ${data.data.status}, SN: ${data.data.sn || 'N/A'}`);
+      } else {
+        alert('Pembelian gagal. Tidak ada data yang dikembalikan.');
+      }
+    } catch (error) {
+      console.error('Error performing test purchase:', error);
+      alert(`Gagal melakukan pembelian: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <AdminLayout>
       <Helmet>
@@ -325,12 +373,13 @@ export default function PPOBAdminPage() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="services">Layanan</TabsTrigger>
             <TabsTrigger value="products">Produk</TabsTrigger>
             <TabsTrigger value="transactions">Transaksi</TabsTrigger>
             <TabsTrigger value="digiflazz">Digiflazz API</TabsTrigger>
+            <TabsTrigger value="test-purchase">Tes Pembelian</TabsTrigger>
           </TabsList>
 
           {/* Dashboard Tab */}
@@ -615,8 +664,8 @@ export default function PPOBAdminPage() {
                               </TableRow>
                             </TableHeader>
                             <TableBody>
-                              {digiflazzProducts.slice(0, 50).map((product) => (
-                                <TableRow key={product.product_id}>
+                              {digiflazzProducts.map((product) => (
+                                <TableRow key={product.product_id || product.buyer_sku_code}>
                                   <TableCell className="font-medium">{product.product_name}</TableCell>
                                   <TableCell>Rp {product.price?.toLocaleString()}</TableCell>
                                   <TableCell>{product.category}</TableCell>
@@ -629,7 +678,6 @@ export default function PPOBAdminPage() {
                         ) : (
                           <p className="text-muted-foreground">Tidak ada data produk dari Digiflazz API.</p>
                         )}
-                        <p className="text-sm text-muted-foreground mt-2">Menampilkan {Math.min(digiflazzProducts.length, 50)} dari {digiflazzProducts.length} produk Digiflazz.</p>
                       </>
                     )}
                   </>
@@ -713,6 +761,42 @@ export default function PPOBAdminPage() {
                     </TableBody>
                   </Table>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Test Purchase Tab */}
+          <TabsContent value="test-purchase" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Tes Pembelian Produk Digiflazz</CardTitle>
+                <CardDescription>Form untuk menguji pembelian produk seperti cek nama token, dll.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-1 gap-4">
+                  <div>
+                    <label htmlFor="product-select" className="block text-sm font-medium mb-1">Pilih Produk</label>
+                    <Select onValueChange={setSelectedProduct}>
+                      <SelectTrigger id="product-select">
+                        <SelectValue placeholder="Pilih produk Digiflazz" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {digiflazzProducts.map((product) => (
+                          <SelectItem key={product.product_id || product.buyer_sku_code} value={product.buyer_sku_code}>
+                            {product.product_name} - Rp {product.price?.toLocaleString()}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label htmlFor="customer-no" className="block text-sm font-medium mb-1">Nomor Pelanggan</label>
+                    <Input id="customer-no" placeholder="Masukkan nomor pelanggan" value={customerNo} onChange={(e) => setCustomerNo(e.target.value)} />
+                  </div>
+                  <div>
+                    <Button className="w-full" onClick={handleTestPurchase}>Tes Pembelian</Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
