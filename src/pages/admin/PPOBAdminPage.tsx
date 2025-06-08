@@ -312,16 +312,18 @@ export default function PPOBAdminPage() {
     setIsLoading(true);
     try {
       const refId = `TEST_${Date.now()}`;
+      const cmd = 'pay-pasca';
       // Generate signature for Digiflazz API with MD5 hashing
-      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
+      // Include cmd in signature as per API documentation
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}${cmd}`;
       // Creating MD5 hash for the signature
       const sign = await crypto.subtle.digest(
-        "MD5",
+        'MD5',
         new TextEncoder().encode(signRaw)
       ).then(hash => {
         return Array.from(new Uint8Array(hash))
-          .map(b => b.toString(16).padStart(2, "0"))
-          .join("");
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
       });
       console.log('Test Purchase Request:', { sku: selectedProduct, customer_no: customerNo, ref_id: refId, sign });
       const response = await fetch('/digiflazz-proxy/v1/transaction', {
@@ -331,12 +333,12 @@ export default function PPOBAdminPage() {
         },
         body: JSON.stringify({
           username: digiflazzConfig.username,
-          apikey: digiflazzConfig.api_key, // ✅ betul: 'apikey', semua huruf kecil
+          apikey: digiflazzConfig.api_key,
           sku: selectedProduct,
           customer_no: customerNo,
           ref_id: refId,
           sign: sign,
-          cmd: 'pay-pasca'
+          cmd: cmd
         })
         
       });
