@@ -314,8 +314,8 @@ export default function PPOBAdminPage() {
       const refId = `TEST_${Date.now()}`;
       const cmd = 'pay-pasca';
       // Generate signature for Digiflazz API with MD5 hashing
-      // Include cmd in signature as per API documentation
-      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}${cmd}`;
+      // Using refId as the third parameter to match server-side implementation
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
       // Creating MD5 hash for the signature
       const sign = await crypto.subtle.digest(
         'MD5',
