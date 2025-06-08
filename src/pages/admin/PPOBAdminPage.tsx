@@ -25,6 +25,7 @@ import { Icons } from "@/components/Icons";
 import { supabase } from '../../integrations/supabase/client';
 import { PPOBService, PPOBProduct, PPOBTransaction } from '../../integrations/supabase/ppob-types';
 import { getPPOBServices, getPPOBProducts, getPPOBTransactions } from '../../services/ppobService';
+import CryptoJS from 'crypto-js';
 
 export default function PPOBAdminPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -317,21 +318,13 @@ export default function PPOBAdminPage() {
       // Using refId as the third parameter to match server-side implementation
       // Forced update for GitHub commit on 2025-06-08
       const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
-      // Creating MD5 hash for the signature
-      const sign = await window.crypto.subtle.digest(
-        'MD5',
-        new TextEncoder().encode(signRaw)
-      ).then(hash => {
-        return Array.from(new Uint8Array(hash))
-          .map(b => b.toString(16).padStart(2, '0'))
-          .join('');
-      });
-      console.log('Test Purchase Request:', { sku: selectedProduct, customer_no: customerNo, ref_id: refId, sign });
+      // Creating MD5 hash for the signature using crypto-js
+      const sign = CryptoJS.MD5(signRaw).toString();
+      console.log('Generated Signature:', sign);
+
       const response = await fetch('/digiflazz-proxy/v1/transaction', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           username: digiflazzConfig.username,
           apikey: digiflazzConfig.api_key,
