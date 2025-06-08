@@ -315,9 +315,9 @@ export default function PPOBAdminPage() {
       const refId = `TEST_${Date.now()}`;
       const cmd = 'pay-pasca';
       // Generate signature for Digiflazz API with MD5 hashing
-      // Using refId as the third parameter to match server-side implementation
+      // Using both refId and cmd in the signature to test compatibility
       // Forced update for GitHub commit on 2025-06-08
-      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}${cmd}`;
       // Creating MD5 hash for the signature using crypto-js
       const sign = CryptoJS.MD5(signRaw).toString();
       console.log('Generated Signature:', sign);
@@ -341,6 +341,9 @@ export default function PPOBAdminPage() {
       console.log('Test Purchase Response:', response.status, responseText);
 
       if (!response.ok) {
+        if (responseText.includes('IP Anda tidak kami kenali')) {
+          throw new Error('IP Anda tidak dikenali oleh Digiflazz. Harap whitelist IP Anda di pengaturan Digiflazz.');
+        }
         throw new Error(`HTTP error! Status: ${response.status}, Details: ${responseText}`);
       }
 
