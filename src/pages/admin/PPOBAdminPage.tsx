@@ -161,7 +161,7 @@ export default function PPOBAdminPage() {
         service_id: '',
         api_key: '',
         username: '',
-        mode: 'development'
+        mode: 'production'
       });
     } else if ('price' in item) {
       // It's a product
@@ -181,7 +181,7 @@ export default function PPOBAdminPage() {
         service_id: product.service_id || '',
         api_key: '',
         username: '',
-        mode: 'development'
+        mode: 'production'
       });
     } else {
       // It's a Digiflazz config
@@ -200,7 +200,7 @@ export default function PPOBAdminPage() {
         service_id: '',
         api_key: item.api_key || '',
         username: item.username || '',
-        mode: item.mode || 'development'
+        mode: item.mode || 'production'
       });
     }
     setIsDialogOpen(true);
@@ -317,10 +317,19 @@ export default function PPOBAdminPage() {
       // Generate signature for Digiflazz API with MD5 hashing
       // Using both refId and cmd in the signature to test compatibility
       // Forced update for GitHub commit on 2025-06-08
-      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}${cmd}`;
+      console.log('CryptoJS available:', typeof CryptoJS !== 'undefined' ? 'Yes' : 'No');
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
       // Creating MD5 hash for the signature using crypto-js
       const sign = CryptoJS.MD5(signRaw).toString();
       console.log('Generated Signature:', sign);
+
+      
+     
+
+
+
+
+
 
       const response = await fetch('/digiflazz-proxy/v1/transaction', {
         method: 'POST',
