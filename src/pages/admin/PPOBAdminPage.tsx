@@ -315,6 +315,7 @@ export default function PPOBAdminPage() {
       const cmd = 'pay-pasca';
       // Generate signature for Digiflazz API with MD5 hashing
       // Using refId as the third parameter to match server-side implementation
+      // Forced update for GitHub commit on 2025-06-08
       const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
       // Creating MD5 hash for the signature
       const sign = await crypto.subtle.digest(
