@@ -318,7 +318,7 @@ export default function PPOBAdminPage() {
       // Forced update for GitHub commit on 2025-06-08
       const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
       // Creating MD5 hash for the signature
-      const sign = await crypto.subtle.digest(
+      const sign = await window.crypto.subtle.digest(
         'MD5',
         new TextEncoder().encode(signRaw)
       ).then(hash => {
