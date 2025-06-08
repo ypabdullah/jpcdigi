@@ -25,8 +25,8 @@ import { Icons } from "@/components/Icons";
 import { supabase } from '../../integrations/supabase/client';
 import { PPOBService, PPOBProduct, PPOBTransaction } from '../../integrations/supabase/ppob-types';
 import { getPPOBServices, getPPOBProducts, getPPOBTransactions } from '../../services/ppobService';
-import CryptoJS from 'crypto-js';
 
+import CryptoJS from 'crypto-js';
 export default function PPOBAdminPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -304,71 +304,73 @@ export default function PPOBAdminPage() {
     { title: "Produk Terjual", value: products.length.toString(), change: "+10.1%", icon: <Icons.shoppingCart className="h-5 w-5" /> },
   ];
 
-  const handleTestPurchase = async () => {
-    if (!selectedProduct || !customerNo) {
-      alert('Mohon pilih produk dan masukkan nomor pelanggan.');
-      return;
+  
+
+const handleTestPurchase = async () => {
+  if (!selectedProduct || !customerNo) {
+    alert('Mohon pilih produk dan masukkan nomor pelanggan.');
+    return;
+  }
+
+  setIsLoading(true);
+  try {
+    const refId = `TEST_${Date.now()}`;
+    const cmd = 'pay-pasca';
+    const username = digiflazzConfig?.username;
+    const apiKey = digiflazzConfig?.api_key;
+
+    if (!username || !apiKey) {
+      throw new Error('Konfigurasi Digiflazz tidak lengkap.');
     }
 
-    setIsLoading(true);
-    try {
-      const refId = `TEST_${Date.now()}`;
-      const cmd = 'pay-pasca';
-      // Generate signature for Digiflazz API with MD5 hashing
-      // Using both refId and cmd in the signature to test compatibility
-      // Forced update for GitHub commit on 2025-06-08
-      console.log('CryptoJS available:', typeof CryptoJS !== 'undefined' ? 'Yes' : 'No');
-      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${refId}`;
-      // Creating MD5 hash for the signature using crypto-js
-      const sign = CryptoJS.MD5(signRaw).toString();
-      console.log('Generated Signature:', sign);
+    // 🔐 Buat signature MD5: username + apiKey + refId
+    
+    // ✅ Signature benar untuk pay-pasca
+const signRaw = `${username}${apiKey}${selectedProduct}${customerNo}${refId}`;
 
-      
-     
+const sign = CryptoJS.MD5(signRaw).toString();
 
 
+    console.log('Generated Signature:', sign);
+    console.log('Selected Product:', selectedProduct);
 
+    const response = await fetch('/digiflazz-proxy/v1/transaction', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username,
+        apikey: apiKey,
+        buyer_sku_code: selectedProduct,
+        customer_no: customerNo,
+        ref_id: refId,
+        sign,
+        cmd
+      })
+    });
 
+    const responseText = await response.text();
+    console.log('Test Purchase Response:', response.status, responseText);
 
-
-      const response = await fetch('/digiflazz-proxy/v1/transaction', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          username: digiflazzConfig.username,
-          apikey: digiflazzConfig.api_key,
-          sku: selectedProduct,
-          customer_no: customerNo,
-          ref_id: refId,
-          sign: sign,
-          cmd: cmd
-        })
-        
-      });
-
-      const responseText = await response.text();
-      console.log('Test Purchase Response:', response.status, responseText);
-
-      if (!response.ok) {
-        if (responseText.includes('IP Anda tidak kami kenali')) {
-          throw new Error('IP Anda tidak dikenali oleh Digiflazz. Harap whitelist IP Anda di pengaturan Digiflazz.');
-        }
-        throw new Error(`HTTP error! Status: ${response.status}, Details: ${responseText}`);
+    if (!response.ok) {
+      if (responseText.includes('IP Anda tidak kami kenali')) {
+        throw new Error('IP Anda tidak dikenali oleh Digiflazz. Harap whitelist IP Anda di pengaturan Digiflazz.');
       }
-
-      const data = JSON.parse(responseText);
-      if (data && data.data) {
-        alert(`Pembelian berhasil! Status: ${data.data.status}, SN: ${data.data.sn || 'N/A'}`);
-      } else {
-        alert('Pembelian gagal. Tidak ada data yang dikembalikan.');
-      }
-    } catch (error) {
-      console.error('Error performing test purchase:', error);
-      alert(`Gagal melakukan pembelian: ${error.message}`);
-    } finally {
-      setIsLoading(false);
+      throw new Error(`HTTP error! Status: ${response.status}, Details: ${responseText}`);
     }
-  };
+
+    const data = JSON.parse(responseText);
+    if (data && data.data) {
+      alert(`Pembelian berhasil! Status: ${data.data.status}, SN: ${data.data.sn || 'N/A'}`);
+    } else {
+      alert('Pembelian gagal. Tidak ada data yang dikembalikan.');
+    }
+  } catch (error: any) {
+    console.error('Error performing test purchase:', error);
+    alert(`Gagal melakukan pembelian: ${error.message}`);
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   return (
     <AdminLayout>
