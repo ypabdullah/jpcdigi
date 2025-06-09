@@ -1,8 +1,9 @@
-import express from 'express';
-import crypto from 'crypto';
-import bodyParser from 'body-parser';
-import dotenv from 'dotenv';
-import { createClient } from '@supabase/supabase-js';
+const express = require('express');
+const bodyParser = require('body-parser');
+const https = require('http');
+const crypto = require('crypto');
+const dotenv = require('dotenv');
+const { createClient } = require('@supabase/supabase-js');
 
 dotenv.config();
 
@@ -142,38 +143,62 @@ const webhookTestProxy = async (req, res) => {
     
     // Forward the request to Digiflazz webhook test or ping endpoint
     console.log(`Forwarding request to Digiflazz endpoint: ${endpoint}`);
-    const response = await fetch(endpoint, {
+    
+    // Prepare the request data
+    const postData = JSON.stringify({
+      username,
+      ref_id,
+      sign,
+      webhook_url
+    });
+    
+    const options = {
+      hostname: 'api.digiflazz.com',
+      path: endpoint.replace('https://api.digiflazz.com', ''),
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        username,
-        ref_id,
-        sign,
-        webhook_url
-      }),
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+    
+    // Make the request using https module
+    const request = https.request(options, (response) => {
+      console.log('Response received from Digiflazz:', response.statusCode, response.statusMessage);
+      
+      let data = '';
+      response.on('data', (chunk) => {
+        data += chunk;
+      });
+      
+      response.on('end', () => {
+        console.log('Raw response text:', data);
+        let parsedData;
+        try {
+          parsedData = data ? JSON.parse(data) : { message: 'No response content from Digiflazz' };
+        } catch (e) {
+          console.error('Error parsing JSON response:', e);
+          parsedData = { error: 'Invalid JSON response from Digiflazz', rawResponse: data };
+        }
+        
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          console.log('Webhook test successful:', parsedData);
+          res.status(200).json({ message: 'Webhook test successful', data: parsedData });
+        } else {
+          console.error('Webhook test failed with status:', response.statusCode, parsedData);
+          res.status(response.statusCode).json({ error: parsedData.error || 'Failed to test webhook', details: parsedData });
+        }
+      });
     });
-
-    console.log('Response received from Digiflazz:', response.status, response.statusText);
-    // Check if response has content before attempting to parse as JSON
-    const text = await response.text();
-    console.log('Raw response text:', text);
-    let data;
-    try {
-      data = text ? JSON.parse(text) : { message: 'No response content from Digiflazz' };
-    } catch (e) {
-      console.error('Error parsing JSON response:', e);
-      data = { error: 'Invalid JSON response from Digiflazz', rawResponse: text };
-    }
-
-    if (response.ok) {
-      console.log('Webhook test successful:', data);
-      res.status(200).json({ message: 'Webhook test successful', data });
-    } else {
-      console.error('Webhook test failed with status:', response.status, data);
-      res.status(response.status).json({ error: data.error || 'Failed to test webhook', details: data });
-    }
+    
+    request.on('error', (error) => {
+      console.error('Error proxying webhook test request:', error);
+      res.status(500).json({ error: `Failed to proxy webhook test request: ${error.message}` });
+    });
+    
+    // Send the request data
+    request.write(postData);
+    request.end();
   } catch (error) {
     console.error('Error proxying webhook test request:', error);
     res.status(500).json({ error: `Failed to proxy webhook test request: ${error.message}` });
