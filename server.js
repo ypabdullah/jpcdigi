@@ -166,6 +166,7 @@ app.post('/api/test-webhook-proxy', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`✅ Webhook server berjalan di http://202.10.44.157:${port}/payload`);
-});
+app.listen(port, '0.0.0.0', () => {
+    console.log(`✅ Webhook server berjalan di http://0.0.0.0:${port}/payload`);
+  });
+  
