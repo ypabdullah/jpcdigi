@@ -93,6 +93,7 @@ app.post('/payload', async (req, res) => {
     } else if (data.ref_id) {
         query = query.eq('ref_id_digiflazz', data.ref_id);
         console.log('🔍 Matching update with ref_id_digiflazz:', data.ref_id)
+      }
 
       const { error } = await query;
       if (error) {
@@ -110,7 +111,7 @@ app.post('/payload', async (req, res) => {
     console.log('❌ No data in payload');
     res.status(400).json({ error: 'No data in payload' });
   }
-
+});
 
 // Webhook test proxy route
 app.post('/api/test-webhook-proxy', async (req, res) => {
@@ -173,5 +174,4 @@ app.post('/api/test-webhook-proxy', async (req, res) => {
 
 app.listen(port, '0.0.0.0', () => {
     console.log(`✅ Webhook server berjalan di http://0.0.0.0:${port}/payload`);
-  });
-  
+});
