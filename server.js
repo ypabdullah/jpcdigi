@@ -84,15 +84,15 @@ app.post('/payload', async (req, res) => {
                 console.log('✅ Transaction updated in Supabase');
             }
         } else {
-            console.log('Unsupported event type:', eventType);
+            console.log('⚠️ Unsupported event type:', eventType);
         }
     } else {
-        console.log('No data field in webhook payload');
+        console.log('❌ No data field in webhook payload. Full payload:', JSON.stringify(req.body, null, 2));
     }
 
     res.json({ success: true });
 });
 
 app.listen(port, () => {
-    console.log(`✅ Webhook server berjalan di http://192.168.18.15:${port}/payload`);
+    console.log(`✅ Webhook server berjalan di http://202.10.44.157:${port}/payload`);
 });
