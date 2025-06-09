@@ -110,7 +110,7 @@ app.post('/payload', async (req, res) => {
     console.log('❌ No data in payload');
     res.status(400).json({ error: 'No data in payload' });
   }
-});
+
 
 // Webhook test proxy route
 app.post('/api/test-webhook-proxy', async (req, res) => {
