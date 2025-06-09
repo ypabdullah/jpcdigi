@@ -85,6 +85,7 @@ app.post('/payload', async (req, res) => {
         sn: data.sn || '',
         rc: data.rc,
         buyer_last_saldo: data.buyer_last_saldo,
+        ref_id_digiflazz: data.ref_id || ''
       });
 
       if (data.buyer_tx_id) {
