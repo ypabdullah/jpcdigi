@@ -70,19 +70,25 @@ app.post('/payload', async (req, res) => {
                 console.log('✅ Transaction created in Supabase');
             }
         } else if (eventType === 'update') {
-            const { error } = await supabase.from('transaksi_digiflazz').update({
-                status: data.status,
-                message: data.message,
-                sn: data.sn || '',
-                rc: data.rc,
-                buyer_last_saldo: data.buyer_last_saldo
-            }).eq('ref_id', data.ref_id);
-            
+            const { error } = await supabase
+                .from('transaksi_digiflazz')
+                .update({
+                    status: data.status,
+                    message: data.message,
+                    sn: data.sn || '',
+                    rc: data.rc,
+                    buyer_last_saldo: data.buyer_last_saldo,
+                })
+                .eq('ref_id', data.buyer_tx_id); // ⬅️ Ini sudah benar, cocokkan ke ref_id lokal kamu
+        
             if (error) {
                 console.error('❌ Error updating Supabase:', error.message);
             } else {
-                console.log('✅ Transaction updated in Supabase');
+                console.log('✅ Transaction updated in Supabase using buyer_tx_id');
+                console.log('🔁 Matching: ref_id (local) vs buyer_tx_id (Digiflazz):', data.buyer_tx_id);
+
             }
+        
         } else {
             console.log('⚠️ Unsupported event type:', eventType);
         }

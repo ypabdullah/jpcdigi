@@ -28,6 +28,7 @@ import { getPPOBServices, getPPOBProducts, getPPOBTransactions } from '../../ser
 import CryptoJS from 'crypto-js';
 import toast from 'react-hot-toast';
 import { RealtimeChannel } from "@supabase/supabase-js";
+import { dataTagSymbol } from "@tanstack/react-query";
 
 export default function PPOBAdminPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -443,10 +444,13 @@ export default function PPOBAdminPage() {
       } else {
         const data = await response.json();
         console.log('Test Purchase Response:', data);
-        alert('Test purchase successful!');
+        alert(`Pembelian berhasil!: ${JSON.stringify(data)}`);
         
-        // Save transaction data to Supabase
-        await saveTransactionToSupabase(data.data);
+        // Save transaction data to Supabase with correct ref_id
+        await saveTransactionToSupabase({
+          ...data.data,
+          ref_id: refId  // Ensure our generated ref_id is used
+        });
         
         setCustomerNo('');
       }
