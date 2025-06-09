@@ -16,6 +16,73 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 app.use(bodyParser.json());
 
+// Store pending transactions for status checking
+const pendingTransactions = new Map();
+
+// Function to poll Digiflazz API for status updates
+function pollDigiflazzStatus(refId, buyerTxId) {
+  const interval = setInterval(async () => {
+    try {
+      console.log(`🔄 Polling status for ref_id: ${refId} or buyer_tx_id: ${buyerTxId}`);
+      // Replace with actual API call to Digiflazz to check status
+      // This is a placeholder for the API request
+      const response = await fetch(`https://api.digiflazz.com/v1/transaction-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          username: process.env.DIGIFLAZZ_USERNAME || 'vatuviWmrQGg',
+          api_key: process.env.DIGIFLAZZ_API_KEY || 'd5271510-8de5-5767-b6cb-b252090c57ae',
+          ref_id: refId || buyerTxId 
+        })
+      });
+      const result = await response.json();
+      
+      if (result.data && (result.data.status === 'berhasil' || result.data.status === 'gagal')) {
+        console.log(`✅ Status updated to ${result.data.status} for ref_id: ${refId}`);
+        const data = result.data;
+        const { error } = await supabase.from('transaksi_digiflazz').insert([
+          {
+            ref_id: data.buyer_tx_id || buyerTxId,
+            ref_id_digiflazz: data.ref_id || refId,
+            buyer_tx_id: data.buyer_tx_id || buyerTxId,
+            customer_no: data.customer_no || '',
+            buyer_sku_code: data.buyer_sku_code || '',
+            status: data.status,
+            message: data.message || '',
+            rc: data.rc || '',
+            sn: data.sn || '',
+            price: data.price || 0,
+            buyer_last_saldo: data.buyer_last_saldo || 0,
+            tele: data.tele || '',
+            wa: data.wa || ''
+          }
+        ]);
+
+        if (error) {
+          console.error('❌ Error saving to Supabase after polling:', error.message);
+        } else {
+          console.log('✅ Transaction saved to Supabase after polling');
+          console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
+        }
+        clearInterval(interval);
+        pendingTransactions.delete(refId || buyerTxId);
+      } else {
+        console.log(`⏳ Status still pending for ref_id: ${refId}`);
+      }
+    } catch (err) {
+      console.error('❌ Error polling Digiflazz API:', err.message);
+    }
+  }, 30000); // Poll every 30 seconds
+
+  setTimeout(() => {
+    if (pendingTransactions.has(refId || buyerTxId)) {
+      console.log(`⏰ Polling timeout for ref_id: ${refId}`);
+      clearInterval(interval);
+      pendingTransactions.delete(refId || buyerTxId);
+    }
+  }, 3600000); // Timeout after 1 hour
+}
+
 app.post('/payload', async (req, res) => {
   console.log('📩 Webhook diterima:', new Date().toISOString());
   console.log('Headers:', JSON.stringify(req.headers, null, 2));
@@ -45,39 +112,45 @@ app.post('/payload', async (req, res) => {
   if (req.body.data) {
     const data = req.body.data;
     if (eventType === 'create') {
-      const { error } = await supabase.from('transaksi_digiflazz').insert([
-        {
-          ref_id: data.buyer_tx_id, // ref_id buatan kita
-          ref_id_digiflazz: data.ref_id, // ref_id dari Digiflazz
-          buyer_tx_id: data.buyer_tx_id,
-          customer_no: data.customer_no,
-          buyer_sku_code: data.buyer_sku_code,
-          status: data.status,
-          message: data.message,
-          rc: data.rc,
-          sn: data.sn || '',
-          price: data.price,
-          buyer_last_saldo: data.buyer_last_saldo,
-          tele: data.tele,
-          wa: data.wa
-        }
-      ]);
+      if (data.status === 'berhasil' || data.status === 'gagal') {
+        const { error } = await supabase.from('transaksi_digiflazz').insert([
+          {
+            ref_id: data.buyer_tx_id, // ref_id buatan kita
+            ref_id_digiflazz: data.ref_id || '', // ref_id dari Digiflazz
+            buyer_tx_id: data.buyer_tx_id,
+            customer_no: data.customer_no,
+            buyer_sku_code: data.buyer_sku_code,
+            status: data.status,
+            message: data.message,
+            rc: data.rc,
+            sn: data.sn || '',
+            price: data.price,
+            buyer_last_saldo: data.buyer_last_saldo,
+            tele: data.tele,
+            wa: data.wa
+          }
+        ]);
 
-      if (error) {
-        console.error('❌ Error saving to Supabase:', error.message);
+        if (error) {
+          console.error('❌ Error saving to Supabase:', error.message);
+        } else {
+          console.log('✅ Transaction created in Supabase');
+          console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
+        }
       } else {
-        console.log('✅ Transaction created in Supabase');
-        console.log('🧾 Data inserted:', JSON.stringify(insertedData, null, 2));
+        console.log('⏳ Transaction not saved to Supabase: Status is pending. Waiting for final status from Digiflazz.');
+        console.log('📌 Data received:', JSON.stringify(data, null, 2));
+        pendingTransactions.set(data.ref_id || data.buyer_tx_id, { ref_id: data.ref_id, buyer_tx_id: data.buyer_tx_id });
+        pollDigiflazzStatus(data.ref_id, data.buyer_tx_id);
       }
-
     } else if (eventType === 'update') {
-        console.log('🔁 Webhook update diterima');
-        console.log('📌 Data update:', JSON.stringify(data, null, 2));
+      console.log('🔁 Webhook update diterima');
+      console.log('📌 Data update:', JSON.stringify(data, null, 2));
     
-        if (!data.buyer_tx_id && !data.ref_id) {
-            console.warn('⚠️ buyer_tx_id atau ref_id tidak ditemukan dalam webhook update:', JSON.stringify(data));
-            return res.status(400).json({ error: 'Missing buyer_tx_id or ref_id' });
-        }
+      if (!data.buyer_tx_id && !data.ref_id) {
+        console.warn('⚠️ buyer_tx_id atau ref_id tidak ditemukan dalam webhook update:', JSON.stringify(data));
+        return res.status(400).json({ error: 'Missing buyer_tx_id or ref_id' });
+      }
 
       let query = supabase.from('transaksi_digiflazz').update({
         status: data.status,
@@ -91,7 +164,7 @@ app.post('/payload', async (req, res) => {
       if (data.buyer_tx_id) {
         query = query.eq('ref_id_internal', data.buyer_tx_id);
         console.log('🔍 Matching update with ref_id_internal (buyer_tx_id):', data.buyer_tx_id);
-    } else if (data.ref_id) {
+      } else if (data.ref_id) {
         query = query.eq('ref_id_digiflazz', data.ref_id);
         console.log('🔍 Matching update with ref_id_digiflazz:', data.ref_id)
       }
@@ -101,7 +174,7 @@ app.post('/payload', async (req, res) => {
         console.error('❌ Error updating Supabase:', error.message);
       } else {
         console.log('✅ Transaction updated in Supabase');
-        console.log('📝 Data updated:', JSON.stringify(updatedData, null, 2));
+        console.log('📝 Data updated:', JSON.stringify(data, null, 2));
       }
     } else {
       console.log('⚠️ Unsupported event type:', eventType);
@@ -174,5 +247,5 @@ app.post('/api/test-webhook-proxy', async (req, res) => {
 });
 
 app.listen(port, '0.0.0.0', () => {
-    console.log(`✅ Webhook server berjalan di http://0.0.0.0:${port}/payload`);
+  console.log(`✅ Webhook server berjalan di http://0.0.0.0:${port}/payload`);
 });
