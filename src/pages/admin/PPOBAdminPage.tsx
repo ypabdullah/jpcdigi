@@ -595,21 +595,30 @@ export default function PPOBAdminPage() {
       setIsTesting(true);
       setTestResult("");
       try {
-        // Use real Digiflazz webhook test endpoint
+        // Use local proxy endpoint to avoid CORS issue
         if (!digiflazzConfig) {
           throw new Error("Digiflazz configuration not loaded");
+        }
+        
+        // Prompt user for webhook ID if not already set
+        let webhookId = webhookUrl.split('/').pop(); // Try to extract from URL if possible
+        if (!webhookId || webhookId.length < 5) {
+          webhookId = prompt("Please enter your Digiflazz Webhook ID (from Atur Koneksi > API > Webhook):") || "";
+        }
+        
+        if (!webhookId) {
+          throw new Error("Webhook ID is required for testing");
         }
         
         // Generate a test reference ID
         const testRefId = `TEST-${Date.now()}`;
         
         // Create a signature for the request (based on Digiflazz requirements)
-        // This should match how Digiflazz expects signatures for webhook testing
         const rawSign = `${digiflazzConfig.username}${digiflazzConfig.api_key}${testRefId}`;
         const signature = CryptoJS.MD5(rawSign).toString();
         
-        // Send request to Digiflazz webhook test endpoint or trigger point
-        const response = await fetch('https://api.digiflazz.com/v1/webhook-test', {
+        // Send request to local proxy API endpoint which will forward to Digiflazz ping endpoint
+        const response = await fetch('/api/test-webhook-proxy', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -618,11 +627,21 @@ export default function PPOBAdminPage() {
             username: digiflazzConfig.username,
             ref_id: testRefId,
             sign: signature,
-            webhook_url: webhookUrl
+            webhook_url: webhookUrl,
+            webhook_id: webhookId,
+            use_ping_endpoint: true
           }),
         });
         
-        const data = await response.json();
+        // Check if response has content before attempting to parse as JSON
+        const text = await response.text();
+        let data;
+        try {
+          data = text ? JSON.parse(text) : { message: 'No response content from proxy' };
+        } catch (e) {
+          data = { error: 'Invalid JSON response from proxy', rawResponse: text };
+        }
+        
         if (response.ok) {
           setTestResult(`Webhook test successful: ${JSON.stringify(data)}`);
         } else {
@@ -1138,7 +1157,7 @@ export default function PPOBAdminPage() {
                 <div className="grid grid-cols-1 gap-4">
                   <div>
                     <label htmlFor="service-select" className="block text-sm font-medium mb-1">Layanan</label>
-                    <Select onValueChange={setSelectedService} value={selectedService || undefined}>
+                    <Select defaultValue={selectedService} onValueChange={setSelectedService}>
                       <SelectTrigger id="service-select" className="w-full rounded-md border-gray-300 dark:border-gray-700">
                         <SelectValue placeholder="Pilih Layanan" />
                       </SelectTrigger>
@@ -1152,7 +1171,7 @@ export default function PPOBAdminPage() {
                   {selectedService && (
                     <div>
                       <label htmlFor="product-select" className="block text-sm font-medium mb-1">Produk (SKU)</label>
-                      <Select onValueChange={setSelectedProduct} value={selectedProduct || undefined}>
+                      <Select defaultValue={selectedProduct} onValueChange={setSelectedProduct}>
                         <SelectTrigger id="product-select" className="w-full rounded-md border-gray-300 dark:border-gray-700">
                           <SelectValue placeholder="Pilih Produk" />
                         </SelectTrigger>

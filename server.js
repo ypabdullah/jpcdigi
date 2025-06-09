@@ -124,6 +124,65 @@ app.post('/payload', async (req, res) => {
     }
 });
 
+// Webhook test proxy endpoint for Digiflazz
+const webhookTestProxy = async (req, res) => {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const { username, ref_id, sign, webhook_url, webhook_id, use_ping_endpoint } = req.body;
+    console.log('Webhook test proxy request received:', { username, ref_id, webhook_url, webhook_id, use_ping_endpoint });
+
+    // Determine which endpoint to use
+    let endpoint = 'https://api.digiflazz.com/v1/webhook-test';
+    if (use_ping_endpoint && webhook_id) {
+      endpoint = `https://api.digiflazz.com/v1/report/hooks/${webhook_id}/pings`;
+    }
+    
+    // Forward the request to Digiflazz webhook test or ping endpoint
+    console.log(`Forwarding request to Digiflazz endpoint: ${endpoint}`);
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        username,
+        ref_id,
+        sign,
+        webhook_url
+      }),
+    });
+
+    console.log('Response received from Digiflazz:', response.status, response.statusText);
+    // Check if response has content before attempting to parse as JSON
+    const text = await response.text();
+    console.log('Raw response text:', text);
+    let data;
+    try {
+      data = text ? JSON.parse(text) : { message: 'No response content from Digiflazz' };
+    } catch (e) {
+      console.error('Error parsing JSON response:', e);
+      data = { error: 'Invalid JSON response from Digiflazz', rawResponse: text };
+    }
+
+    if (response.ok) {
+      console.log('Webhook test successful:', data);
+      res.status(200).json({ message: 'Webhook test successful', data });
+    } else {
+      console.error('Webhook test failed with status:', response.status, data);
+      res.status(response.status).json({ error: data.error || 'Failed to test webhook', details: data });
+    }
+  } catch (error) {
+    console.error('Error proxying webhook test request:', error);
+    res.status(500).json({ error: `Failed to proxy webhook test request: ${error.message}` });
+  }
+};
+
+// Add the webhook test proxy route
+app.post('/api/test-webhook-proxy', webhookTestProxy);
+
 app.listen(port, () => {
     console.log(`✅ Webhook server berjalan di http://202.10.44.157:${port}/payload`);
 });
