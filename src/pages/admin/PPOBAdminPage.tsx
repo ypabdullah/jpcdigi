@@ -19,14 +19,16 @@ import {
   TableHeader, 
   TableRow 
 } from "@/components/ui/table";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import AdminDialog from '../../components/admin/AdminDialog';
 import { AdminLayout } from "../../components/admin/AdminLayout";
 import { Icons } from "@/components/Icons";
 import { supabase } from '../../integrations/supabase/client';
 import { PPOBService, PPOBProduct, PPOBTransaction } from '../../integrations/supabase/ppob-types';
 import { getPPOBServices, getPPOBProducts, getPPOBTransactions } from '../../services/ppobService';
-
 import CryptoJS from 'crypto-js';
+import toast from 'react-hot-toast';
+import { RealtimeChannel } from "@supabase/supabase-js";
+
 export default function PPOBAdminPage() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -34,18 +36,22 @@ export default function PPOBAdminPage() {
   const [services, setServices] = useState<PPOBService[]>([]);
   const [products, setProducts] = useState<PPOBProduct[]>([]);
   const [digiflazzProducts, setDigiflazzProducts] = useState<any[]>([]);
+  const [digiflazzCategories, setDigiflazzCategories] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<PPOBTransaction[]>([]);
+  const [digiflazzTransactions, setDigiflazzTransactions] = useState<any[]>([]);
+  const [supabaseTransactions, setSupabaseTransactions] = useState<any[]>([]);
   const [digiflazzConfig, setDigiflazzConfig] = useState<any>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [selectedItem, setSelectedItem] = useState<PPOBService | PPOBProduct | null>(null);
-  const [currentFormType, setCurrentFormType] = useState<'service' | 'product' | 'digiflazz'>('service');
-  const [formData, setFormData] = useState({
-    id: '', name: '', category: 'Top Up', icon: '', color: '', icon_color: '', route: '', is_new: false, price: 0, description: '', service_id: '',
-    api_key: '', username: '', mode: 'development'
-  });
+  const [currentFormType, setCurrentFormType] = useState<'service' | 'product' | 'digiflazz' | 'transaction'>('service');
+  const [selectedService, setSelectedService] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<string>('');
   const [customerNo, setCustomerNo] = useState<string>('');
+  const [plnValidationResult, setPlnValidationResult] = useState<any>(null);
+  const [isValidatingPln, setIsValidatingPln] = useState<boolean>(false);
+  const [transactionHistory, setTransactionHistory] = useState<any[]>([]);
+  const [supabaseChannel, setSupabaseChannel] = useState<RealtimeChannel | null>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -84,7 +90,7 @@ export default function PPOBAdminPage() {
 
   // Load Digiflazz products when tab changes to products
   useEffect(() => {
-    if (activeTab === 'products' && digiflazzConfig && digiflazzConfig.api_key && digiflazzConfig.username) {
+    if (activeTab === 'digiflazz' && digiflazzConfig && digiflazzConfig.api_key && digiflazzConfig.username) {
       const fetchDigiflazzProducts = async () => {
         setIsLoading(true);
         try {
@@ -95,7 +101,6 @@ export default function PPOBAdminPage() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              cmd: 'prepaid',
               username: digiflazzConfig.username,
               apiKey: digiflazzConfig.api_key
             }),
@@ -106,15 +111,21 @@ export default function PPOBAdminPage() {
           }
           
           const data = await response.json();
-          if (data.data) {
+          console.log('Digiflazz API Response:', data); // Log response for debugging
+          if (data && Array.isArray(data.data)) {
             setDigiflazzProducts(data.data);
+            // Extract unique categories from Digiflazz products for service selection
+            const categories = [...new Set(data.data.map(product => product.category))];
+            setDigiflazzCategories(categories.map(cat => ({ id: cat, name: cat })));
           } else {
-            console.error('No data returned from Digiflazz API');
+            console.error('Unexpected data structure from Digiflazz API', data);
             setDigiflazzProducts([]);
+            setDigiflazzCategories([]);
           }
         } catch (error) {
           console.error('Error fetching Digiflazz products:', error);
           setDigiflazzProducts([]);
+          setDigiflazzCategories([]);
           alert('Failed to fetch products from Digiflazz API');
         } finally {
           setIsLoading(false);
@@ -125,6 +136,156 @@ export default function PPOBAdminPage() {
     }
   }, [activeTab, digiflazzConfig]);
 
+  useEffect(() => {
+    if (activeTab === 'transactions' && digiflazzConfig && digiflazzConfig.api_key && digiflazzConfig.username) {
+      fetchDigiflazzTransactions();
+      fetchSupabaseTransactions();
+    }
+  }, [activeTab, digiflazzConfig]);
+
+  useEffect(() => {
+    const fetchTransactionHistory = async () => {
+      if (!supabase) return;
+      try {
+        const { data, error } = await supabase
+          .from("transaksi_digiflazz")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(50);
+        if (error) throw error;
+        setTransactionHistory(data || []);
+      } catch (err) {
+        console.error("Error fetching transaction history:", err);
+        setTransactionHistory([]);
+      }
+    };
+    fetchTransactionHistory();
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    
+    const channel = supabase
+      .channel("transactions")
+      .on("postgres_changes", {
+        event: "INSERT",
+        schema: "public",
+        table: "transaksi_digiflazz"
+      }, (payload) => {
+        console.log("New transaction received:", payload);
+        setTransactionHistory(prev => [payload.new, ...prev]);
+        toast({
+          title: "Transaksi Baru",
+          description: `Transaksi baru dengan ID ${payload.new.ref_id} telah diterima.`
+        });
+      })
+      .subscribe();
+      
+    setSupabaseChannel(channel);
+    
+    return () => {
+      if (channel) {
+        channel.unsubscribe();
+        setSupabaseChannel(null);
+      }
+    };
+  }, [supabase, toast]);
+
+  const fetchDigiflazzTransactions = async () => {
+    setIsLoading(true);
+    try {
+      const functionUrl = '/digiflazz-proxy/v1/transaction-history';
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}history`;
+      const sign = CryptoJS.MD5(signRaw).toString();
+      
+      const response = await fetch(functionUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: digiflazzConfig.username,
+          sign: sign
+        }),
+      });
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.log('Transaction history endpoint not found. This feature may not be implemented in the proxy yet.');
+          setDigiflazzTransactions([]);
+        } else {
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
+      } else {
+        const data = await response.json();
+        console.log('Digiflazz Transaction History Response:', data); // Log response for debugging
+        if (data && Array.isArray(data.data)) {
+          setDigiflazzTransactions(data.data);
+        } else {
+          console.error('Unexpected transaction data structure from Digiflazz API', data);
+          setDigiflazzTransactions([]);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching Digiflazz transactions:', error);
+      setDigiflazzTransactions([]);
+      alert('Failed to fetch transactions from Digiflazz API');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const fetchSupabaseTransactions = async () => {
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('transaksi_digiflazz')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      if (data) {
+        setSupabaseTransactions(data);
+      } else {
+        setSupabaseTransactions([]);
+      }
+    } catch (error) {
+      console.error('Error fetching Supabase transactions:', error);
+      setSupabaseTransactions([]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const saveTransactionToSupabase = async (transactionData: any) => {
+    if (!supabase) return;
+    try {
+      const { data, error } = await supabase
+        .from("transaksi_digiflazz")
+        .upsert([
+          {
+            ref_id: transactionData.ref_id,
+            customer_no: transactionData.customer_no,
+            buyer_sku_code: transactionData.buyer_sku_code,
+            status: transactionData.status,
+            message: transactionData.message,
+            rc: transactionData.rc,
+            sn: transactionData.sn,
+            price: transactionData.price,
+            buyer_last_saldo: transactionData.buyer_last_saldo,
+            tele: transactionData.tele,
+            wa: transactionData.wa
+          }
+        ]);
+      
+      if (error) throw error;
+      console.log("Transaction saved to Supabase:", data);
+    } catch (err) {
+      console.error("Error saving transaction to Supabase:", err);
+      alert("Failed to save transaction to database. Please check console for details.");
+    }
+  };
+
   const handleLoadMore = () => {
     setIsLoadingMore(true);
     
@@ -134,8 +295,7 @@ export default function PPOBAdminPage() {
     }, 1500);
   };
 
-  const handleAdd = (type: 'service' | 'product' | 'digiflazz') => {
-    setFormData({ id: '', name: '', category: 'Top Up', icon: '', color: '', icon_color: '', route: '', is_new: false, price: 0, description: '', service_id: '', api_key: '', username: '', mode: 'development' });
+  const handleAdd = (type: 'service' | 'product' | 'digiflazz' | 'transaction') => {
     setSelectedItem(null);
     setCurrentFormType(type);
     setIsDialogOpen(true);
@@ -147,61 +307,18 @@ export default function PPOBAdminPage() {
       // It's a service
       const service = item as PPOBService;
       setCurrentFormType('service');
-      setFormData({
-        id: service.id || '',
-        name: service.name || '',
-        category: service.category || 'Top Up',
-        icon: service.icon || '',
-        color: service.color || '',
-        icon_color: service.icon_color || '',
-        route: service.route || '',
-        is_new: service.is_new || false,
-        price: 0,
-        description: '',
-        service_id: '',
-        api_key: '',
-        username: '',
-        mode: 'production'
-      });
-    } else if ('price' in item) {
+      setSelectedService(service.id);
+    } else if ('price' in item && !('ref_id' in item)) {
       // It's a product
       const product = item as PPOBProduct;
       setCurrentFormType('product');
-      setFormData({
-        id: product.id || '',
-        name: product.name || '',
-        category: 'Top Up', // Default value since category doesn't exist on PPOBProduct
-        icon: '',
-        color: '',
-        icon_color: '',
-        route: '',
-        is_new: false,
-        price: product.price || 0,
-        description: product.description || '',
-        service_id: product.service_id || '',
-        api_key: '',
-        username: '',
-        mode: 'production'
-      });
+      setSelectedProduct(product.id);
+    } else if ('ref_id' in item) {
+      // It's a transaction
+      setCurrentFormType('transaction');
     } else {
       // It's a Digiflazz config
       setCurrentFormType('digiflazz');
-      setFormData({
-        id: item.id || '',
-        name: '',
-        category: 'Top Up',
-        icon: '',
-        color: '',
-        icon_color: '',
-        route: '',
-        is_new: false,
-        price: 0,
-        description: '',
-        service_id: '',
-        api_key: item.api_key || '',
-        username: item.username || '',
-        mode: item.mode || 'production'
-      });
     }
     setIsDialogOpen(true);
   };
@@ -228,137 +345,248 @@ export default function PPOBAdminPage() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSaveItem = async (data: any, type: string) => {
     setIsLoading(true);
     try {
-      if (currentFormType === 'service') {
-        const serviceData = {
-          id: formData.id || undefined,
-          name: formData.name,
-          category: formData.category,
-          icon: formData.icon,
-          color: formData.color,
-          icon_color: formData.icon_color,
-          route: formData.route,
-          is_new: formData.is_new
-        };
-        if (formData.id) {
-          await supabase.from('ppob_services').update(serviceData).eq('id', formData.id);
-          setServices(services.map(s => s.id === formData.id ? { ...s, ...serviceData } : s));
+      if (type === 'transaction') {
+        if (selectedItem && selectedItem.id) {
+          await handleUpdateTransaction(selectedItem.id, data);
         } else {
-          const { data } = await supabase.from('ppob_services').insert(serviceData).select().single();
-          setServices([...services, data]);
+          // Adding a new transaction manually is not typical, but we'll support it
+          const { error } = await supabase.from('transaksi_digiflazz').insert([data]);
+          if (error) throw error;
+          alert('Transaksi berhasil ditambahkan ke database.');
+          fetchSupabaseTransactions(); // Refresh the list
         }
-      } else if (currentFormType === 'product') {
-        const productData = {
-          id: formData.id || undefined,
-          name: formData.name,
-          price: formData.price,
-          description: formData.description,
-          service_id: formData.service_id
-        };
-        if (formData.id) {
-          await supabase.from('ppob_products').update(productData).eq('id', formData.id);
-          setProducts(products.map(p => p.id === formData.id ? { ...p, ...productData } : p));
+      } else {
+        // Handle save for other types (service, product, digiflazz)
+        if (selectedItem) {
+          // Update existing item
+          const tableName = type === 'service' ? 'ppob_services' : type === 'product' ? 'ppob_products' : 'digiflazz_config';
+          const idField = type === 'digiflazz' ? 'user_id' : 'id';
+          const idValue = type === 'digiflazz' ? null : selectedItem.id;
+          const { error } = await supabase.from(tableName).update(data).eq(idField, idValue);
+          if (error) throw error;
+          alert(`${type.charAt(0).toUpperCase() + type.slice(1)} berhasil diperbarui.`);
         } else {
-          const { data } = await supabase.from('ppob_products').insert(productData).select().single();
-          setProducts([...products, data]);
+          // Add new item
+          const tableName = type === 'service' ? 'ppob_services' : type === 'product' ? 'ppob_products' : 'digiflazz_config';
+          if (type === 'digiflazz') {
+            data.user_id = null; // Set the user_id for digiflazz_config
+          }
+          const { error } = await supabase.from(tableName).insert([data]);
+          if (error) throw error;
+          alert(`${type.charAt(0).toUpperCase() + type.slice(1)} berhasil ditambahkan.`);
         }
-      } else if (currentFormType === 'digiflazz') {
-        const configData = {
-          id: formData.id || undefined,
-          api_key: formData.api_key,
-          username: formData.username,
-          mode: formData.mode
-        };
-        if (formData.id) {
-          await supabase.from('digiflazz_config').update(configData).eq('id', formData.id);
-          setDigiflazzConfig({ ...digiflazzConfig, ...configData });
-        } else {
-          const { data } = await supabase.from('digiflazz_config').insert(configData).select().single();
-          setDigiflazzConfig(data);
-        }
+        // Refresh data
+        if (type === 'service') fetchServices();
+        else if (type === 'product') fetchProducts();
+        else loadDigiflazzConfig();
       }
-      setIsDialogOpen(false);
     } catch (error) {
-      console.error(`Error saving data:`, error);
-      alert(`Failed to save data`);
+      console.error(`Error saving ${type}:`, error);
+      alert(`Gagal menyimpan ${type}.`);
+    } finally {
+      setIsLoading(false);
+      setIsDialogOpen(false);
+    }
+  };
+
+  const handleTestPurchase = async () => {
+    if (!selectedService) {
+      alert('Please select a service first');
+      return;
+    }
+    if (!selectedProduct) {
+      alert('Please select a product');
+      return;
+    }
+    if (!customerNo.trim()) {
+      alert('Please enter a customer number');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      console.log('Selected Product for Purchase:', selectedProduct); // Log the selected product value
+      const username = digiflazzConfig?.username || '';
+      const apiKey = digiflazzConfig?.api_key || '';
+      const refId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const signRaw = `${username}${apiKey}${refId}`;
+      const signature = CryptoJS.MD5(signRaw).toString();
+      const buyerSkuCode = typeof selectedProduct === 'string' ? selectedProduct : (selectedProduct as any).buyer_sku_code;
+      const requestBody = {
+        username,
+        buyer_sku_code: buyerSkuCode || '',
+        customer_no: customerNo,
+        ref_id: refId,
+        sign: signature,
+      };
+      console.log('Test Purchase Request Body:', requestBody); // Log request body for debugging
+      const response = await fetch('/digiflazz-proxy/v1/transaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Test purchase failed:', errorText);
+        if (errorText.includes('IP tidak diizinkan')) {
+          alert('Transaksi gagal: IP tidak diizinkan. Harap whitelist IP Anda di Digiflazz.');
+        } else if (errorText.includes('Produk sedang Gangguan') || errorText.includes('Produk sedang tidak tersedia') || errorText.includes('Non Aktif')) {
+          alert('Transaksi gagal: Produk sedang tidak tersedia atau non-aktif. Silakan coba produk lain.');
+        } else {
+          alert(`Test purchase failed: ${errorText}`);
+        }
+      } else {
+        const data = await response.json();
+        console.log('Test Purchase Response:', data);
+        alert('Test purchase successful!');
+        
+        // Save transaction data to Supabase
+        await saveTransactionToSupabase(data.data);
+        
+        setCustomerNo('');
+      }
+    } catch (error) {
+      console.error('Error during test purchase:', error);
+      alert('An error occurred during test purchase');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value, type, checked } = e.target;
-    setFormData({
-      ...formData,
-      [name]: type === "checkbox" ? checked : value
-    });
-  };
-
-  // Mock data for dashboard stats
-  const dashboardStats = [
-    { title: "Total Transaksi", value: transactions.length.toString(), change: "+12.5%", icon: <Icons.chartBar className="h-5 w-5" /> },
-    { title: "Pendapatan", value: "Rp " + transactions.reduce((sum, t) => sum + (t.amount || 0), 0).toLocaleString(), change: "+8.2%", icon: <Icons.wallet className="h-5 w-5" /> },
-    { title: "Pengguna Aktif", value: "5,890", change: "+15.3%", icon: <Icons.users className="h-5 w-5" /> },
-    { title: "Produk Terjual", value: products.length.toString(), change: "+10.1%", icon: <Icons.shoppingCart className="h-5 w-5" /> },
-  ];
-
-  
-
-  const handleTestPurchase = async () => {
-    if (!selectedProduct || !customerNo) {
-      alert('Mohon pilih produk dan masukkan nomor pelanggan.');
-      return;
-    }
-  
+  const handleCheckBalance = async () => {
     setIsLoading(true);
     try {
-      const refId = `TEST_${Date.now()}`;
-      const cmd = 'pay-pasca';
-      const username = digiflazzConfig?.username;
-      const apiKey = digiflazzConfig?.api_key;
-  
-      if (!username || !apiKey) {
-        throw new Error('Konfigurasi Digiflazz tidak lengkap.');
-      }
-  
-      // ✅ Format signature sesuai Digiflazz
-      const signRaw = `${username}${apiKey}${selectedProduct}${customerNo}${refId}`;
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}depo`;
       const sign = CryptoJS.MD5(signRaw).toString();
-  
-      const response = await fetch('/digiflazz-proxy/v1/transaction', {
+
+      const response = await fetch('/digiflazz-proxy/v1/cek-saldo', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username,
-          apikey: apiKey,
-          buyer_sku_code: selectedProduct,
-          customer_no: customerNo,
-          ref_id: refId,
-          sign,
-          cmd
+          username: digiflazzConfig.username,
+          sign: sign
         })
       });
-  
+
       const responseText = await response.text();
-      console.log('Test Purchase Response:', response.status, responseText);
-  
+      console.log('Balance Check Response:', response.status, responseText);
+
       if (!response.ok) {
+        if (responseText.includes('IP Anda tidak kami kenali')) {
+          throw new Error('IP Anda tidak dikenali oleh Digiflazz. Harap whitelist IP Anda di pengaturan Digiflazz.');
+        }
         throw new Error(`HTTP error! Status: ${response.status}, Details: ${responseText}`);
       }
-  
+
       const data = JSON.parse(responseText);
       if (data && data.data) {
-        alert(`Pembelian berhasil! Status: ${data.data.status}, SN: ${data.data.sn || 'N/A'}`);
+        alert(`Saldo Digiflazz: Rp ${data.data.deposit.toLocaleString('id-ID')}`);
       } else {
-        alert('Pembelian gagal. Tidak ada data yang dikembalikan.');
+        alert('Gagal memeriksa saldo. Tidak ada data yang dikembalikan.');
       }
-    } catch (error: any) {
-      console.error('Error performing test purchase:', error);
-      alert(`Gagal melakukan pembelian: ${error.message}`);
+    } catch (error) {
+      console.error('Error checking balance:', error);
+      alert(`Gagal memeriksa saldo: ${error.message}`);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDeleteTransaction = async (transactionId: string) => {
+    setIsDeleting(true);
+    try {
+      const { error } = await supabase
+        .from('transaksi_digiflazz')
+        .delete()
+        .eq('id', transactionId);
+
+      if (error) throw error;
+      alert('Transaksi berhasil dihapus dari database.');
+      fetchSupabaseTransactions(); // Refresh the list
+    } catch (error) {
+      console.error('Error deleting transaction:', error);
+      alert('Gagal menghapus transaksi dari database.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleUpdateTransaction = async (transactionId: string, updatedData: any) => {
+    try {
+      const { data, error } = await supabase
+        .from('transaksi_digiflazz')
+        .update(updatedData)
+        .eq('id', transactionId)
+        .select();
+
+      if (error) throw error;
+      alert('Transaksi berhasil diperbarui di database.');
+      fetchSupabaseTransactions(); // Refresh the list
+      return data;
+    } catch (error) {
+      console.error('Error updating transaction:', error);
+      alert('Gagal memperbarui transaksi di database.');
+      return null;
+    }
+  };
+
+  const handleEditTransaction = (transaction: any) => {
+    setSelectedItem(transaction);
+    setCurrentFormType('transaction');
+    setIsDialogOpen(true);
+  };
+
+  const handleCheckPlnId = async () => {
+    if (!customerNo) {
+      alert('Silakan masukkan nomor pelanggan PLN terlebih dahulu.');
+      return;
+    }
+
+    setIsValidatingPln(true);
+    try {
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}${customerNo}`;
+      const sign = CryptoJS.MD5(signRaw).toString();
+
+      const response = await fetch('/digiflazz-proxy/v1/inquiry-pln', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: digiflazzConfig.username,
+          customer_no: customerNo,
+          sign: sign
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('PLN ID Validation Error:', response.status, errorText);
+        setPlnValidationResult({ status: 'Gagal', message: `HTTP error! Status: ${response.status}`, details: errorText });
+        alert(`Validasi gagal! Status: ${response.status}. Detail: ${errorText}`);
+        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+      }
+
+      const data = await response.json();
+      if (data && data.data) {
+        setPlnValidationResult(data.data);
+        console.log('PLN Validation Full Response:', data);
+        alert(`Status validasi: ${data.data.status}, Nama: ${data.data.name || 'N/A'}, No. Pelanggan: ${data.data.customer_no || 'N/A'}, No. Meter: ${data.data.meter_no || 'N/A'}, ID Pelanggan: ${data.data.subscriber_id || 'N/A'}, Daya: ${data.data.segment_power || 'N/A'}`);
+      } else {
+        setPlnValidationResult({ status: 'Gagal', message: 'Tidak ada data yang dikembalikan dari Digiflazz API.' });
+        alert('Validasi gagal. Tidak ada data yang dikembalikan.');
+      }
+    } catch (error) {
+      console.error('Error validating PLN ID:', error);
+      setPlnValidationResult({ status: 'Gagal', message: error.message });
+      alert('Gagal memvalidasi nomor pelanggan PLN.');
+    } finally {
+      setIsValidatingPln(false);
     }
   };
 
@@ -381,6 +609,20 @@ export default function PPOBAdminPage() {
               <Icons.plus className="mr-2 h-4 w-4" />
               Tambah {activeTab === 'services' ? 'Layanan' : 'Produk'}
             </Button>
+            <Button 
+              onClick={handleCheckBalance} 
+              disabled={isLoading || !digiflazzConfig}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {isLoading ? 'Memeriksa...' : 'Cek Saldo Digiflazz'}
+            </Button>
+            <Button 
+              onClick={handleTestPurchase} 
+              disabled={isLoading || !digiflazzConfig || !selectedService || !selectedProduct || !customerNo}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {isLoading ? 'Membeli...' : 'Tes Pembelian'}
+            </Button>
           </div>
         </div>
 
@@ -398,24 +640,7 @@ export default function PPOBAdminPage() {
           <TabsContent value="dashboard" className="space-y-4">
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {dashboardStats.map((stat, index) => (
-                <Card key={index}>
-                  <CardContent className="p-6">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground">{stat.title}</p>
-                        <h3 className="text-2xl font-bold mt-1">{stat.value}</h3>
-                        <p className={`text-xs mt-1 ${stat.change.startsWith('+') ? 'text-green-600' : 'text-red-600'}`}>
-                          {stat.change} dari bulan lalu
-                        </p>
-                      </div>
-                      <div className="bg-primary/10 p-2 rounded-full">
-                        {stat.icon}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+              {/* dashboardStats */}
             </div>
 
             {/* Recent Transactions */}
@@ -487,32 +712,7 @@ export default function PPOBAdminPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {[
-                      { id: "V001", user: "Bambang Suprapto", document: "KTP", submissionDate: "2025-06-01 10:23:45", status: "Pending", action: "Review" },
-                      { id: "V002", user: "Ratna Sari", document: "KTP", submissionDate: "2025-06-01 09:15:30", status: "Disetujui", action: "Lihat" },
-                      { id: "V003", user: "Hendra Wijaya", document: "KTP", submissionDate: "2025-06-01 08:45:22", status: "Ditolak", action: "Lihat" }
-                    ].map((verification) => (
-                      <TableRow key={verification.id}>
-                        <TableCell className="font-medium">{verification.id}</TableCell>
-                        <TableCell>{verification.user}</TableCell>
-                        <TableCell>{verification.document}</TableCell>
-                        <TableCell>{verification.submissionDate}</TableCell>
-                        <TableCell>
-                          <span className={`px-2 py-1 rounded-full text-xs ${
-                            verification.status === 'Disetujui' ? 'bg-green-100 text-green-800' :
-                            verification.status === 'Ditolak' ? 'bg-red-100 text-red-800' :
-                            'bg-yellow-100 text-yellow-800'
-                          }`}>
-                            {verification.status}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <Button variant="ghost" size="sm">
-                            {verification.action}
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {/* dashboardStats */}
                   </TableBody>
                 </Table>
               </CardContent>
@@ -559,6 +759,95 @@ export default function PPOBAdminPage() {
                 )}
               </CardContent>
             </Card>
+            <div className="mt-6">
+              <h3 className="text-lg font-medium mb-2">Transaksi Digiflazz</h3>
+              {isLoading ? (
+                <p>Memuat transaksi...</p>
+              ) : digiflazzTransactions.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-md">
+                    <thead className="bg-gray-200 dark:bg-gray-700">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Ref ID</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Produk</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Nomor Pelanggan</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Waktu</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Harga</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {digiflazzTransactions.map((transaction) => (
+                        <tr key={transaction.ref_id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                          <td className="px-4 py-2 text-sm font-medium text-gray-900 dark:text-white whitespace-nowrap">{transaction.ref_id}</td>
+                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">{transaction.product_name}</td>
+                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">{transaction.customer_no}</td>
+                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">{transaction.status}</td>
+                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{transaction.created_at || 'N/A'}</td>
+                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">Rp {transaction.price ? transaction.price.toLocaleString('id-ID') : 'N/A'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p>Tidak ada transaksi dari Digiflazz.</p>
+              )}
+            </div>
+            <div className="mt-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Riwayat Transaksi dari Database Supabase</h3>
+              {isLoading ? (
+                <div className="text-center py-10">Memuat data transaksi...</div>
+              ) : supabaseTransactions.length === 0 ? (
+                <div className="text-center py-10 text-gray-500">Tidak ada data transaksi di database Supabase</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white border border-gray-200 rounded-lg">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="py-2 px-4 border-b text-left">Ref ID</th>
+                        <th className="py-2 px-4 border-b text-left">Produk</th>
+                        <th className="py-2 px-4 border-b text-left">Nomor Pelanggan</th>
+                        <th className="py-2 px-4 border-b text-left">Status</th>
+                        <th className="py-2 px-4 border-b text-left">Waktu</th>
+                        <th className="py-2 px-4 border-b text-left">Harga</th>
+                        <th className="py-2 px-4 border-b text-left">Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {supabaseTransactions.map((transaction) => (
+                        <tr key={transaction.id} className="hover:bg-gray-50">
+                          <td className="py-2 px-4 border-b">{transaction.ref_id}</td>
+                          <td className="py-2 px-4 border-b">{transaction.product_name}</td>
+                          <td className="py-2 px-4 border-b">{transaction.customer_no}</td>
+                          <td className="py-2 px-4 border-b">{transaction.status}</td>
+                          <td className="py-2 px-4 border-b">{new Date(transaction.created_at).toLocaleString()}</td>
+                          <td className="py-2 px-4 border-b">Rp {transaction.price.toLocaleString()}</td>
+                          <td className="py-2 px-4 border-b">
+                            <button 
+                              onClick={() => handleEditTransaction(transaction)} 
+                              className="text-blue-600 hover:text-blue-800 mr-2"
+                            >
+                              Edit
+                            </button>
+                            <button 
+                              onClick={() => {
+                                if (window.confirm('Apakah Anda yakin ingin menghapus transaksi ini?')) {
+                                  handleDeleteTransaction(transaction.id);
+                                }
+                              }} 
+                              className="text-red-600 hover:text-red-800"
+                            >
+                              Hapus
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </TabsContent>
           
           {/* Digiflazz API Tab */}
@@ -787,26 +1076,92 @@ export default function PPOBAdminPage() {
               <CardContent>
                 <div className="grid grid-cols-1 gap-4">
                   <div>
-                    <label htmlFor="product-select" className="block text-sm font-medium mb-1">Pilih Produk</label>
-                    <Select onValueChange={setSelectedProduct}>
-                      <SelectTrigger id="product-select">
-                        <SelectValue placeholder="Pilih produk Digiflazz" />
+                    <label htmlFor="service-select" className="block text-sm font-medium mb-1">Layanan</label>
+                    <Select onValueChange={setSelectedService} value={selectedService || undefined}>
+                      <SelectTrigger id="service-select" className="w-full rounded-md border-gray-300 dark:border-gray-700">
+                        <SelectValue placeholder="Pilih Layanan" />
                       </SelectTrigger>
                       <SelectContent>
-                        {digiflazzProducts.map((product) => (
-                          <SelectItem key={product.product_id || product.buyer_sku_code} value={product.buyer_sku_code}>
-                            {product.product_name} - Rp {product.price?.toLocaleString()}
-                          </SelectItem>
+                        {digiflazzCategories.map(category => (
+                          <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
+                  {selectedService && (
+                    <div>
+                      <label htmlFor="product-select" className="block text-sm font-medium mb-1">Produk (SKU)</label>
+                      <Select onValueChange={setSelectedProduct} value={selectedProduct || undefined}>
+                        <SelectTrigger id="product-select" className="w-full rounded-md border-gray-300 dark:border-gray-700">
+                          <SelectValue placeholder="Pilih Produk" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(() => {
+                            // Filter products based on the selected Digiflazz category
+                            const filteredProducts = digiflazzProducts.filter(product => {
+                              console.log('Filtering products for category:', selectedService);
+                              console.log('Product details:', product);
+                              return product.category === selectedService;
+                            });
+
+                            // If no products match, show a message
+                            if (filteredProducts.length === 0) {
+                              return <div className="p-2 text-gray-500">Tidak ada produk yang sesuai dengan layanan {selectedService}.</div>;
+                            }
+
+                            // Show matched products
+                            return filteredProducts.map(product => (
+                              <SelectItem key={product.buyer_sku_code} value={product.buyer_sku_code}>{product.product_name}</SelectItem>
+                            ));
+                          })()}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-xs text-gray-500 mt-1">Produk difilter berdasarkan kategori Digiflazz.</p>
+                    </div>
+                  )}
+                  {selectedService && (
+                    <div>
+                      <label htmlFor="customerNo" className="block text-sm font-medium mb-1">Nomor Pelanggan</label>
+                      <div className="flex space-x-2 mt-1">
+                        <input
+                          type="text"
+                          id="customerNo"
+                          value={customerNo}
+                          onChange={(e) => setCustomerNo(e.target.value)}
+                          placeholder="Masukkan nomor pelanggan"
+                          className="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        />
+                        <button
+                          onClick={handleCheckPlnId}
+                          disabled={isValidatingPln || !customerNo}
+                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50"
+                        >
+                          {isValidatingPln ? 'Memvalidasi...' : 'Cek ID PLN'}
+                        </button>
+                      </div>
+                      {plnValidationResult && (
+                        <div className="mt-2 p-3 border border-green-300 bg-green-50 rounded-md text-sm">
+                          <p className="font-medium text-green-800">Hasil Validasi ID PLN:</p>
+                          <ul className="list-disc list-inside text-green-700 mt-1">
+                            <li>Status: {plnValidationResult.status}</li>
+                            <li>Nama: {plnValidationResult.name || 'N/A'}</li>
+                            <li>No. Pelanggan: {plnValidationResult.customer_no}</li>
+                            <li>No. Meter: {plnValidationResult.meter_no || 'N/A'}</li>
+                            <li>ID Pelanggan: {plnValidationResult.subscriber_id || 'N/A'}</li>
+                            <li>Daya: {plnValidationResult.segment_power || 'N/A'}</li>
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div>
-                    <label htmlFor="customer-no" className="block text-sm font-medium mb-1">Nomor Pelanggan</label>
-                    <Input id="customer-no" placeholder="Masukkan nomor pelanggan" value={customerNo} onChange={(e) => setCustomerNo(e.target.value)} />
-                  </div>
-                  <div>
-                    <Button className="w-full" onClick={handleTestPurchase}>Tes Pembelian</Button>
+                    <Button 
+                      onClick={handleTestPurchase} 
+                      disabled={isLoading || !selectedService || !selectedProduct || !customerNo}
+                      className="w-full mt-2 bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      {isLoading ? 'Loading...' : 'Test Pembelian'}
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -816,94 +1171,13 @@ export default function PPOBAdminPage() {
       </div>
 
       {/* Add/Edit Dialog */}
-      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-        <DialogContent className="sm:max-w-[425px]">
-          <DialogHeader>
-            <DialogTitle>{formData.id && currentFormType !== 'digiflazz' ? 'Edit' : 'Tambah'} {currentFormType === 'service' ? 'Layanan' : currentFormType === 'product' ? 'Produk' : 'Konfigurasi Digiflazz'}</DialogTitle>
-          </DialogHeader>
-          <form className="space-y-4 pt-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">{currentFormType === 'digiflazz' ? 'Username Digiflazz' : 'Nama'}</label>
-              <Input name={currentFormType === 'digiflazz' ? 'username' : 'name'} value={currentFormType === 'digiflazz' ? formData.username : formData.name} onChange={handleInputChange} placeholder="Masukkan nama" required />
-            </div>
-            {currentFormType === "service" && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Kategori</label>
-                  <Input name="category" value={formData.category} onChange={handleInputChange} placeholder="Masukkan kategori" required />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Ikon</label>
-                  <Input name="icon" value={formData.icon} onChange={handleInputChange} placeholder="Masukkan nama ikon" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Warna</label>
-                  <Input name="color" value={formData.color} onChange={handleInputChange} placeholder="Masukkan warna latar (hex)" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Warna Ikon</label>
-                  <Input name="icon_color" value={formData.icon_color} onChange={handleInputChange} placeholder="Masukkan warna ikon (hex)" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Rute</label>
-                  <Input name="route" value={formData.route} onChange={handleInputChange} placeholder="Masukkan path rute" />
-                </div>
-                <div className="flex items-center space-x-2">
-                  <input 
-                    type="checkbox" 
-                    id="is_new" 
-                    name="is_new" 
-                    checked={formData.is_new} 
-                    onChange={handleInputChange} 
-                    className="rounded"
-                  />
-                  <label htmlFor="is_new" className="text-sm font-medium">Layanan Baru?</label>
-                </div>
-              </>
-            )}
-            {currentFormType === "product" && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Harga</label>
-                  <Input type="number" name="price" value={formData.price} onChange={handleInputChange} placeholder="Masukkan harga" required />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Deskripsi</label>
-                  <Input name="description" value={formData.description} onChange={handleInputChange} placeholder="Masukkan deskripsi" />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">ID Layanan</label>
-                  <Input name="service_id" value={formData.service_id} onChange={handleInputChange} placeholder="Masukkan ID layanan terkait" required />
-                </div>
-              </>
-            )}
-            {currentFormType === "digiflazz" && (
-              <>
-                <div>
-                  <label className="block text-sm font-medium mb-1">API Key</label>
-                  <Input name="api_key" value={formData.api_key} onChange={handleInputChange} placeholder="Masukkan API Key" required />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium mb-1">Mode</label>
-                  <Select name="mode" value={formData.mode} onValueChange={(value) => setFormData(prev => ({ ...prev, mode: value }))}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Pilih mode" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="development">Development</SelectItem>
-                      <SelectItem value="production">Production</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </>
-            )}
-            <div className="flex justify-end space-x-2">
-              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-              <Button type="button" onClick={handleSave} disabled={isLoading}>Simpan</Button>
-            </div>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <AdminDialog 
+        isOpen={isDialogOpen} 
+        onClose={() => setIsDialogOpen(false)} 
+        formType={currentFormType} 
+        selectedItem={selectedItem} 
+        onSave={handleSaveItem} 
+      />
     </AdminLayout>
   );
 }
