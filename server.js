@@ -47,7 +47,8 @@ app.post('/payload', async (req, res) => {
     if (eventType === 'create') {
       const { error } = await supabase.from('transaksi_digiflazz').insert([
         {
-          ref_id: data.ref_id || data.buyer_tx_id,
+          ref_id: data.buyer_tx_id, // ref_id buatan kita
+          ref_id_digiflazz: data.ref_id, // ref_id dari Digiflazz
           buyer_tx_id: data.buyer_tx_id,
           customer_no: data.customer_no,
           buyer_sku_code: data.buyer_sku_code,
@@ -66,13 +67,17 @@ app.post('/payload', async (req, res) => {
         console.error('❌ Error saving to Supabase:', error.message);
       } else {
         console.log('✅ Transaction created in Supabase');
+        console.log('🧾 Data inserted:', JSON.stringify(insertedData, null, 2));
       }
 
     } else if (eventType === 'update') {
-      if (!data.buyer_tx_id && !data.ref_id) {
-        console.warn('⚠️ buyer_tx_id atau ref_id tidak ditemukan');
-        return res.status(400).json({ error: 'Missing buyer_tx_id or ref_id' });
-      }
+        console.log('🔁 Webhook update diterima');
+        console.log('📌 Data update:', JSON.stringify(data, null, 2));
+    
+        if (!data.buyer_tx_id && !data.ref_id) {
+            console.warn('⚠️ buyer_tx_id atau ref_id tidak ditemukan dalam webhook update:', JSON.stringify(data));
+            return res.status(400).json({ error: 'Missing buyer_tx_id or ref_id' });
+        }
 
       let query = supabase.from('transaksi_digiflazz').update({
         status: data.status,
@@ -83,18 +88,18 @@ app.post('/payload', async (req, res) => {
       });
 
       if (data.buyer_tx_id) {
-        query = query.eq('ref_id', data.buyer_tx_id);
-        console.log('🔍 Matching update with buyer_tx_id:', data.buyer_tx_id);
-      } else if (data.ref_id) {
-        query = query.eq('ref_id', data.ref_id);
-        console.log('🔍 Matching update with ref_id:', data.ref_id);
-      }
+        query = query.eq('ref_id_internal', data.buyer_tx_id);
+        console.log('🔍 Matching update with ref_id_internal (buyer_tx_id):', data.buyer_tx_id);
+    } else if (data.ref_id) {
+        query = query.eq('ref_id_digiflazz', data.ref_id);
+        console.log('🔍 Matching update with ref_id_digiflazz:', data.ref_id)
 
       const { error } = await query;
       if (error) {
         console.error('❌ Error updating Supabase:', error.message);
       } else {
         console.log('✅ Transaction updated in Supabase');
+        console.log('📝 Data updated:', JSON.stringify(updatedData, null, 2));
       }
     } else {
       console.log('⚠️ Unsupported event type:', eventType);
