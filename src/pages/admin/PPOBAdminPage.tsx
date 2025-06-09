@@ -53,6 +53,7 @@ export default function PPOBAdminPage() {
   const [isValidatingPln, setIsValidatingPln] = useState<boolean>(false);
   const [transactionHistory, setTransactionHistory] = useState<any[]>([]);
   const [supabaseChannel, setSupabaseChannel] = useState<RealtimeChannel | null>(null);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -64,7 +65,7 @@ export default function PPOBAdminPage() {
         const productsData = await supabase.from('ppob_products').select('*');
         setProducts(productsData.data || []);
         // Fetch all transactions without filtering by user ID
-        const transactionsData = await supabase.from('ppob_transactions').select('*').order('created_at', { ascending: false });
+        const transactionsData = await supabase.from('ppob_transactions').select('*').order('transaction_date', { ascending: false });
         setTransactions(transactionsData.data || []);
         
         // Load Digiflazz configuration
@@ -147,17 +148,20 @@ export default function PPOBAdminPage() {
   useEffect(() => {
     const fetchTransactionHistory = async () => {
       if (!supabase) return;
+      setIsLoading(true);
       try {
         const { data, error } = await supabase
           .from("transaksi_digiflazz")
           .select("*")
-          .order("created_at", { ascending: false })
+          .order("updated_at", { ascending: false })
           .limit(50);
         if (error) throw error;
         setTransactionHistory(data || []);
-      } catch (err) {
-        console.error("Error fetching transaction history:", err);
+      } catch (err: any) {
+        console.error('Error fetching transaction history:', err);
         setTransactionHistory([]);
+      } finally {
+        setIsLoading(false);
       }
     };
     fetchTransactionHistory();
@@ -237,12 +241,13 @@ export default function PPOBAdminPage() {
   };
 
   const fetchSupabaseTransactions = async () => {
-    setIsLoading(true);
+    if (!supabase) return;
+    setIsLoadingTransactions(true);
     try {
       const { data, error } = await supabase
         .from('transaksi_digiflazz')
         .select('*')
-        .order('created_at', { ascending: false });
+        .order('updated_at', { ascending: false });
 
       if (error) throw error;
       if (data) {
@@ -250,40 +255,27 @@ export default function PPOBAdminPage() {
       } else {
         setSupabaseTransactions([]);
       }
-    } catch (error) {
-      console.error('Error fetching Supabase transactions:', error);
-      setSupabaseTransactions([]);
+    } catch (err: any) {
+      console.error('Error fetching Supabase transactions:', err);
+      toast.error('Gagal memuat transaksi dari Supabase');
     } finally {
-      setIsLoading(false);
+      setIsLoadingTransactions(false);
     }
   };
 
-  const saveTransactionToSupabase = async (transactionData: any) => {
+  const saveTransactionToSupabase = async (transaction: PPOBTransaction) => {
     if (!supabase) return;
     try {
+      // Remove id and updated_at to let Supabase handle them if they are serial and timestamp with default now()
+      const { id, updated_at, ...transactionData } = transaction;
       const { data, error } = await supabase
-        .from("transaksi_digiflazz")
-        .upsert([
-          {
-            ref_id: transactionData.ref_id,
-            customer_no: transactionData.customer_no,
-            buyer_sku_code: transactionData.buyer_sku_code,
-            status: transactionData.status,
-            message: transactionData.message,
-            rc: transactionData.rc,
-            sn: transactionData.sn,
-            price: transactionData.price,
-            buyer_last_saldo: transactionData.buyer_last_saldo,
-            tele: transactionData.tele,
-            wa: transactionData.wa
-          }
-        ]);
-      
+        .from('transaksi_digiflazz')
+        .upsert([transactionData], { onConflict: 'ref_id' });
       if (error) throw error;
-      console.log("Transaction saved to Supabase:", data);
-    } catch (err) {
-      console.error("Error saving transaction to Supabase:", err);
-      alert("Failed to save transaction to database. Please check console for details.");
+      toast.success('Transaksi berhasil disimpan ke Supabase');
+    } catch (err: any) {
+      console.error('Error saving transaction to Supabase:', err);
+      toast.error('Gagal menyimpan transaksi ke Supabase');
     }
   };
 
@@ -594,6 +586,196 @@ export default function PPOBAdminPage() {
     }
   };
 
+  const WebhookManagementTab = () => {
+    const [webhookUrl, setWebhookUrl] = useState<string>("");
+    const [testResult, setTestResult] = useState<string>("");
+    const [isTesting, setIsTesting] = useState<boolean>(false);
+
+    const handleTestWebhook = async () => {
+      setIsTesting(true);
+      setTestResult("");
+      try {
+        // Use real Digiflazz webhook test endpoint
+        if (!digiflazzConfig) {
+          throw new Error("Digiflazz configuration not loaded");
+        }
+        
+        // Generate a test reference ID
+        const testRefId = `TEST-${Date.now()}`;
+        
+        // Create a signature for the request (based on Digiflazz requirements)
+        // This should match how Digiflazz expects signatures for webhook testing
+        const rawSign = `${digiflazzConfig.username}${digiflazzConfig.api_key}${testRefId}`;
+        const signature = CryptoJS.MD5(rawSign).toString();
+        
+        // Send request to Digiflazz webhook test endpoint or trigger point
+        const response = await fetch('https://api.digiflazz.com/v1/webhook-test', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            username: digiflazzConfig.username,
+            ref_id: testRefId,
+            sign: signature,
+            webhook_url: webhookUrl
+          }),
+        });
+        
+        const data = await response.json();
+        if (response.ok) {
+          setTestResult(`Webhook test successful: ${JSON.stringify(data)}`);
+        } else {
+          setTestResult(`Webhook test failed: ${data.error || response.statusText}`);
+        }
+      } catch (error: any) {
+        setTestResult(`Error testing webhook: ${error.message}`);
+      } finally {
+        setIsTesting(false);
+      }
+    };
+
+    return (
+      <div className="mt-6">
+        <h3 className="text-xl font-semibold mb-4">Webhook Management</h3>
+        <div className="bg-white p-6 rounded-lg shadow-md">
+          <div className="mb-4">
+            <label htmlFor="webhookUrl" className="block text-sm font-medium text-gray-700">Webhook URL</label>
+            <input
+              type="text"
+              id="webhookUrl"
+              value={webhookUrl}
+              onChange={(e) => setWebhookUrl(e.target.value)}
+              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50"
+              placeholder="Enter your webhook URL"
+            />
+          </div>
+          <button
+            onClick={handleTestWebhook}
+            disabled={isTesting || !webhookUrl}
+            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
+            {isTesting ? "Testing..." : "Test Webhook"}
+          </button>
+          {testResult && (
+            <div className="mt-4 p-3 border rounded-md bg-gray-50">
+              <p className="text-sm text-gray-700">{testResult}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const toastDuration = 5000;
+  const toastPosition = "top-right" as const;
+
+  const fetchServices = async () => {
+    // Implementation for fetching services
+    console.log("Fetching services");
+  };
+
+  const fetchProducts = async () => {
+    // Implementation for fetching products
+    console.log("Fetching products");
+  };
+
+  const loadDigiflazzConfig = async () => {
+    // Implementation for loading Digiflazz config
+    console.log("Loading Digiflazz config");
+  };
+
+  interface PPOBTransaction {
+    id: string;
+    updated_at: string;
+    ref_id: string;
+    status: string;
+    amount: number;
+    fee: number;
+    customer_no: string;
+    product_code: string;
+    message: string | null;
+    serial_no: string | null;
+    buyer_last_saldo: number | null;
+    tele: string | null;
+    wa: string | null;
+    customer_name: string;
+    product_name: string;
+    transaction_date?: string;
+    customer_id?: string;
+  }
+
+  const TransactionsTab = () => {
+    return (
+      <div className="mt-6">
+        <h3 className="text-xl font-semibold mb-4">Riwayat Transaksi</h3>
+        {/* Only showing Supabase transaction history */}
+        <div className="bg-white p-6 rounded-lg shadow-md">
+          <h4 className="text-lg font-medium text-gray-900 mb-4">Riwayat Transaksi dari Database Supabase</h4>
+          {isLoadingTransactions ? (
+            <div className="text-center py-10">Memuat data transaksi...</div>
+          ) : supabaseTransactions.length === 0 ? (
+            <div className="text-center py-10 text-gray-500">Tidak ada data transaksi di database Supabase</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ref ID</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nomor Pelanggan</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kode SKU Pembeli</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Pesan</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">RC</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SN</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Harga</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Saldo Terakhir Pembeli</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tele</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">WA</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tanggal Update</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {supabaseTransactions.map((transaction) => (
+                    <tr key={transaction.id}>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{transaction.ref_id || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.customer_no || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.buyer_sku_code || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.status || '-'}</td>
+                      <td className="px-6 py-4 text-sm text-gray-500">{transaction.message || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.rc || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.sn || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.price ? 'Rp ' + transaction.price.toLocaleString() : '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.buyer_last_saldo ? 'Rp ' + transaction.buyer_last_saldo.toLocaleString() : '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.tele || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.wa || '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.updated_at ? new Date(transaction.updated_at).toLocaleString() : '-'}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <button 
+                          onClick={() => handleEditTransaction(transaction)}
+                          className="text-indigo-600 hover:text-indigo-900 mr-2"
+                        >
+                          Edit
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteTransaction(transaction.id)}
+                          className="text-red-600 hover:text-red-900"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <AdminLayout>
       <Helmet>
@@ -638,6 +820,7 @@ export default function PPOBAdminPage() {
             <TabsTrigger value="transactions">Transaksi</TabsTrigger>
             <TabsTrigger value="digiflazz">Digiflazz API</TabsTrigger>
             <TabsTrigger value="test-purchase">Tes Pembelian</TabsTrigger>
+            <TabsTrigger value="webhook">Webhook Management</TabsTrigger>
           </TabsList>
 
           {/* Dashboard Tab */}
@@ -725,133 +908,7 @@ export default function PPOBAdminPage() {
 
           {/* Transactions Tab */}
           <TabsContent value="transactions" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Transaksi PPOB</CardTitle>
-                <CardDescription>Daftar semua transaksi PPOB yang telah dilakukan</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {isLoading ? (
-                  <div className="flex justify-center items-center h-64">
-                    <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary"></div>
-                  </div>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>ID</TableHead>
-                        <TableHead>Produk</TableHead>
-                        <TableHead>Nomor</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Tanggal</TableHead>
-                        <TableHead>Harga</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {transactions.map((transaction) => (
-                        <TableRow key={transaction.id}>
-                          <TableCell className="font-medium">{transaction.id?.slice(0, 8)}</TableCell>
-                          <TableCell>{transaction.product_name}</TableCell>
-                          <TableCell>{transaction.customer_id}</TableCell>
-                          <TableCell>{transaction.status}</TableCell>
-                          <TableCell>{new Date(transaction.created_at || '').toLocaleString()}</TableCell>
-                          <TableCell>Rp {(transaction.amount || 0).toLocaleString()}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </CardContent>
-            </Card>
-            <div className="mt-6">
-              <h3 className="text-lg font-medium mb-2">Transaksi Digiflazz</h3>
-              {isLoading ? (
-                <p>Memuat transaksi...</p>
-              ) : digiflazzTransactions.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full bg-white dark:bg-gray-800 rounded-lg overflow-hidden shadow-md">
-                    <thead className="bg-gray-200 dark:bg-gray-700">
-                      <tr>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Ref ID</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Produk</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Nomor Pelanggan</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Status</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Waktu</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300 uppercase tracking-wider">Harga</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {digiflazzTransactions.map((transaction) => (
-                        <tr key={transaction.ref_id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
-                          <td className="px-4 py-2 text-sm font-medium text-gray-900 dark:text-white whitespace-nowrap">{transaction.ref_id}</td>
-                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">{transaction.product_name}</td>
-                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">{transaction.customer_no}</td>
-                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">{transaction.status}</td>
-                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 whitespace-nowrap">{transaction.created_at || 'N/A'}</td>
-                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">Rp {transaction.price ? transaction.price.toLocaleString('id-ID') : 'N/A'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p>Tidak ada transaksi dari Digiflazz.</p>
-              )}
-            </div>
-            <div className="mt-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">Riwayat Transaksi dari Database Supabase</h3>
-              {isLoading ? (
-                <div className="text-center py-10">Memuat data transaksi...</div>
-              ) : supabaseTransactions.length === 0 ? (
-                <div className="text-center py-10 text-gray-500">Tidak ada data transaksi di database Supabase</div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full bg-white border border-gray-200 rounded-lg">
-                    <thead>
-                      <tr className="bg-gray-100">
-                        <th className="py-2 px-4 border-b text-left">Ref ID</th>
-                        <th className="py-2 px-4 border-b text-left">Produk</th>
-                        <th className="py-2 px-4 border-b text-left">Nomor Pelanggan</th>
-                        <th className="py-2 px-4 border-b text-left">Status</th>
-                        <th className="py-2 px-4 border-b text-left">Waktu</th>
-                        <th className="py-2 px-4 border-b text-left">Harga</th>
-                        <th className="py-2 px-4 border-b text-left">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {supabaseTransactions.map((transaction) => (
-                        <tr key={transaction.id} className="hover:bg-gray-50">
-                          <td className="py-2 px-4 border-b">{transaction.ref_id}</td>
-                          <td className="py-2 px-4 border-b">{transaction.product_name}</td>
-                          <td className="py-2 px-4 border-b">{transaction.customer_no}</td>
-                          <td className="py-2 px-4 border-b">{transaction.status}</td>
-                          <td className="py-2 px-4 border-b">{new Date(transaction.created_at).toLocaleString()}</td>
-                          <td className="py-2 px-4 border-b">Rp {transaction.price.toLocaleString()}</td>
-                          <td className="py-2 px-4 border-b">
-                            <button 
-                              onClick={() => handleEditTransaction(transaction)} 
-                              className="text-blue-600 hover:text-blue-800 mr-2"
-                            >
-                              Edit
-                            </button>
-                            <button 
-                              onClick={() => {
-                                if (window.confirm('Apakah Anda yakin ingin menghapus transaksi ini?')) {
-                                  handleDeleteTransaction(transaction.id);
-                                }
-                              }} 
-                              className="text-red-600 hover:text-red-800"
-                            >
-                              Hapus
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
+            <TransactionsTab />
           </TabsContent>
           
           {/* Digiflazz API Tab */}
@@ -1170,6 +1227,11 @@ export default function PPOBAdminPage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Webhook Management Tab */}
+          <TabsContent value="webhook" className="space-y-4">
+            <WebhookManagementTab />
           </TabsContent>
         </Tabs>
       </div>

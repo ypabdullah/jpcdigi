@@ -19,6 +19,7 @@ app.post('/payload', async (req, res) => {
     console.log('📩 Webhook diterima:', new Date().toISOString());
     console.log('Headers:', JSON.stringify(req.headers, null, 2));
     console.log('Body:', JSON.stringify(req.body, null, 2));
+    console.log('Raw Body:', req.body); // Log raw body in case parsing fails
 
     // Extract event type
     const eventType = req.body.event || 'unknown';
@@ -48,55 +49,79 @@ app.post('/payload', async (req, res) => {
         const data = req.body.data;
         console.log('Data to save:', data);
         
-        if (eventType === 'create') {
-            const { error } = await supabase.from('transaksi_digiflazz').insert([
-                {
-                    ref_id: data.ref_id,
-                    customer_no: data.customer_no,
-                    buyer_sku_code: data.buyer_sku_code,
-                    status: data.status,
-                    message: data.message,
-                    rc: data.rc,
-                    sn: data.sn || '',
-                    price: data.price,
-                    buyer_last_saldo: data.buyer_last_saldo,
-                    created_at: new Date().toISOString()
+        if (data && eventType) {
+            console.log('📩 Event diterima:', eventType);
+            console.log('📋 Data:', JSON.stringify(data, null, 2));
+
+            if (eventType === 'create') {
+                const { error } = await supabase
+                    .from('transaksi_digiflazz')
+                    .insert([
+                        {
+                            ref_id: data.ref_id || data.buyer_tx_id,
+                            buyer_tx_id: data.buyer_tx_id,
+                            customer_no: data.customer_no,
+                            buyer_sku_code: data.buyer_sku_code,
+                            status: data.status,
+                            message: data.message,
+                            rc: data.rc,
+                            sn: data.sn || '',
+                            price: data.price,
+                            buyer_last_saldo: data.buyer_last_saldo,
+                            tele: data.tele,
+                            wa: data.wa
+                        }
+                    ]);
+                
+                if (error) {
+                    console.error('❌ Error saving to Supabase:', error.message);
+                } else {
+                    console.log('✅ Transaction created in Supabase');
                 }
-            ]);
-            
-            if (error) {
-                console.error('❌ Error saving to Supabase:', error.message);
-            } else {
-                console.log('✅ Transaction created in Supabase');
-            }
-        } else if (eventType === 'update') {
-            const { error } = await supabase
-                .from('transaksi_digiflazz')
-                .update({
+            } else if (eventType === 'update') {
+                console.log('🔁 Webhook update diterima');
+                console.log('📌 Data update:', JSON.stringify(data, null, 2));
+
+                if (!data.buyer_tx_id && !data.ref_id) {
+                    console.warn('⚠️ buyer_tx_id atau ref_id tidak ditemukan dalam webhook update:', JSON.stringify(data));
+                    return res.status(400).json({ error: 'Missing buyer_tx_id or ref_id' });
+                }
+
+                // Try to update based on buyer_tx_id or ref_id
+                let query = supabase.from('transaksi_digiflazz').update({
                     status: data.status,
                     message: data.message,
                     sn: data.sn || '',
                     rc: data.rc,
                     buyer_last_saldo: data.buyer_last_saldo,
-                })
-                .eq('ref_id', data.buyer_tx_id); // ⬅️ Ini sudah benar, cocokkan ke ref_id lokal kamu
-        
-            if (error) {
-                console.error('❌ Error updating Supabase:', error.message);
+                });
+
+                // Use buyer_tx_id if available, otherwise ref_id
+                if (data.buyer_tx_id) {
+                    query = query.eq('ref_id', data.buyer_tx_id);
+                    console.log('🔍 Matching update with buyer_tx_id:', data.buyer_tx_id);
+                } else if (data.ref_id) {
+                    query = query.eq('ref_id', data.ref_id);
+                    console.log('🔍 Matching update with ref_id:', data.ref_id);
+                }
+
+                const { error } = await query;
+                
+                if (error) {
+                    console.error('❌ Error updating Supabase:', error.message);
+                } else {
+                    console.log('✅ Transaction updated in Supabase');
+                    console.log('🔁 Matching: ref_id (local) vs buyer_tx_id or ref_id (Digiflazz):', data.buyer_tx_id || data.ref_id);
+                }
             } else {
-                console.log('✅ Transaction updated in Supabase using buyer_tx_id');
-                console.log('🔁 Matching: ref_id (local) vs buyer_tx_id (Digiflazz):', data.buyer_tx_id);
-
+                console.log('⚠️ Unsupported event type:', eventType);
             }
-        
         } else {
-            console.log('⚠️ Unsupported event type:', eventType);
+            console.log('❌ No data field in webhook payload. Full payload:', JSON.stringify(req.body, null, 2));
         }
-    } else {
-        console.log('❌ No data field in webhook payload. Full payload:', JSON.stringify(req.body, null, 2));
-    }
 
-    res.json({ success: true });
+        res.json({ success: true });
+    }
 });
 
 app.listen(port, () => {
