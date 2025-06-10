@@ -60,6 +60,7 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 
         if (error) {
           console.error('❌ Error saving to Supabase after polling:', error.message);
+          console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
         } else {
           console.log('✅ Transaction saved to Supabase after polling');
           console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
@@ -71,6 +72,7 @@ function pollDigiflazzStatus(refId, buyerTxId) {
       }
     } catch (err) {
       console.error('❌ Error polling Digiflazz API:', err.message);
+      console.error('📛 Detailed Error:', JSON.stringify(err, null, 2));
     }
   }, 30000); // Poll every 30 seconds
 
@@ -133,6 +135,7 @@ app.post('/payload', async (req, res) => {
 
         if (error) {
           console.error('❌ Error saving to Supabase:', error.message);
+          console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
         } else {
           console.log('✅ Transaction created in Supabase');
           console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
@@ -152,29 +155,93 @@ app.post('/payload', async (req, res) => {
         return res.status(400).json({ error: 'Missing buyer_tx_id or ref_id' });
       }
 
-      let query = supabase.from('transaksi_digiflazz').update({
-        status: data.status,
-        message: data.message,
-        sn: data.sn || '',
-        rc: data.rc,
-        buyer_last_saldo: data.buyer_last_saldo,
-        ref_id_digiflazz: data.ref_id || ''
-      });
-
+      // Check if transaction exists in Supabase
+      let existingTransaction = null;
       if (data.buyer_tx_id) {
-        query = query.eq('ref_id_internal', data.buyer_tx_id);
-        console.log('🔍 Matching update with ref_id_internal (buyer_tx_id):', data.buyer_tx_id);
-      } else if (data.ref_id) {
-        query = query.eq('ref_id_digiflazz', data.ref_id);
-        console.log('🔍 Matching update with ref_id_digiflazz:', data.ref_id)
+        const { data: txData, error } = await supabase.from('transaksi_digiflazz')
+          .select('*')
+          .eq('ref_id_internal', data.buyer_tx_id)
+          .single();
+        if (error) {
+          console.error('❌ Error checking existing transaction by buyer_tx_id:', error.message);
+        } else if (txData) {
+          existingTransaction = txData;
+          console.log('🔍 Found existing transaction by buyer_tx_id:', data.buyer_tx_id);
+        }
+      }
+      if (!existingTransaction && data.ref_id) {
+        const { data: txData, error } = await supabase.from('transaksi_digiflazz')
+          .select('*')
+          .eq('ref_id_digiflazz', data.ref_id)
+          .single();
+        if (error) {
+          console.error('❌ Error checking existing transaction by ref_id:', error.message);
+        } else if (txData) {
+          existingTransaction = txData;
+          console.log('🔍 Found existing transaction by ref_id:', data.ref_id);
+        }
       }
 
-      const { error } = await query;
-      if (error) {
-        console.error('❌ Error updating Supabase:', error.message);
+      if (existingTransaction) {
+        // Update existing transaction
+        let query = supabase.from('transaksi_digiflazz').update({
+          status: data.status,
+          message: data.message,
+          sn: data.sn || '',
+          rc: data.rc,
+          buyer_last_saldo: data.buyer_last_saldo,
+          ref_id_digiflazz: data.ref_id // Explicitly save ref_id_digiflazz
+        });
+
+        if (data.buyer_tx_id) {
+          query = query.eq('ref_id_internal', data.buyer_tx_id);
+          console.log('🔍 Matching update with ref_id_internal (buyer_tx_id):', data.buyer_tx_id);
+        } else if (data.ref_id) {
+          query = query.eq('ref_id_digiflazz', data.ref_id);
+          console.log('🔍 Matching update with ref_id_digiflazz:', data.ref_id);
+        }
+
+        const { error } = await query;
+        if (error) {
+          console.error('❌ Error updating Supabase:', error.message);
+          console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
+        } else {
+          console.log('✅ Transaction updated in Supabase');
+          console.log('📝 Data updated:', JSON.stringify(data, null, 2));
+        }
       } else {
-        console.log('✅ Transaction updated in Supabase');
-        console.log('📝 Data updated:', JSON.stringify(data, null, 2));
+        // Transaction not found, insert as new if status is berhasil or gagal
+        if (data.status === 'berhasil' || data.status === 'gagal') {
+          console.log('🆕 Transaction not found in Supabase, inserting as new since status is final');
+          const { error } = await supabase.from('transaksi_digiflazz').insert([
+            {
+              ref_id: data.buyer_tx_id, // ref_id buatan kita
+              ref_id_digiflazz: data.ref_id, // Explicitly save ref_id_digiflazz
+              buyer_tx_id: data.buyer_tx_id,
+              customer_no: data.customer_no || '',
+              buyer_sku_code: data.buyer_sku_code || '',
+              status: data.status,
+              message: data.message || '',
+              rc: data.rc || '',
+              sn: data.sn || '',
+              price: data.price || 0,
+              buyer_last_saldo: data.buyer_last_saldo || 0,
+              tele: data.tele || '',
+              wa: data.wa || ''
+            }
+          ]);
+
+          if (error) {
+            console.error('❌ Error inserting new transaction to Supabase:', error.message);
+            console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
+          } else {
+            console.log('✅ New transaction inserted into Supabase');
+            console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
+          }
+        } else {
+          console.log('⏳ Update received but status is still pending, not inserting into Supabase yet');
+          console.log('📌 Data received:', JSON.stringify(data, null, 2));
+        }
       }
     } else {
       console.log('⚠️ Unsupported event type:', eventType);
