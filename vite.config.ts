@@ -30,7 +30,7 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      "WebSocket": path.resolve(__dirname, "node_modules", "@supabase", "realtime-js", "dist", "module", "RealtimeClient.js"),
+      "WebSocket": path.resolve(__dirname, "node_modules", "@supabase", "realtime-js", "dist", "module"),
     },
   },
   build: {
