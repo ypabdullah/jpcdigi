@@ -4,6 +4,7 @@ import http from 'http'; // Tetap http, bukan https
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+import path from 'path';
 
 dotenv.config();
 
@@ -84,6 +85,8 @@ function pollDigiflazzStatus(refId, buyerTxId) {
     }
   }, 3600000); // Timeout after 1 hour
 }
+
+app.use(express.static(path.join(__dirname, 'dist')));
 
 app.post('/payload', async (req, res) => {
   console.log('📩 Webhook diterima:', new Date().toISOString());
