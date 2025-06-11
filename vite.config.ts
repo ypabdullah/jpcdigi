@@ -3,6 +3,9 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
+
+
+
 export default defineConfig(({ mode }) => ({
   server: {
     host: "::",
@@ -27,6 +30,7 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "WebSocket": path.resolve(__dirname, "node_modules", "@supabase", "realtime-js", "dist", "module", "websocket.js"),
     },
   },
   build: {
