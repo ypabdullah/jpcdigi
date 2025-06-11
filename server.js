@@ -1,10 +1,14 @@
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
 import express from 'express';
 import bodyParser from 'body-parser';
 import http from 'http'; // Tetap http, bukan https
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
-import path from 'path';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 dotenv.config();
 
@@ -86,7 +90,7 @@ function pollDigiflazzStatus(refId, buyerTxId) {
   }, 3600000); // Timeout after 1 hour
 }
 
-app.use(express.static(path.join(__dirname, 'dist')));
+app.use(express.static(join(__dirname, 'dist')));
 
 app.post('/payload', async (req, res) => {
   console.log('📩 Webhook diterima:', new Date().toISOString());
