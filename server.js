@@ -8,13 +8,13 @@ import { createClient } from '@supabase/supabase-js';
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 5173;
+const port = process.env.PORT || 80;
 const secret = process.env.SECRET_WEBHOOK;
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-app.use(bodyParser.json());
+app.use(bodyParser.json({ type: 'application/json' }));
 
 // Store pending transactions for status checking
 const pendingTransactions = new Map();
@@ -96,7 +96,7 @@ app.post('/payload', async (req, res) => {
   const signature = req.headers['x-digiflazz-signature'];
   if (!signature) {
     console.error('❌ Tidak ada signature di header');
-    return res.status(401).json({ error: 'No signature provided' });
+    return res.status(401).json({ status: 'error', message: 'No signature provided', data: {} });
   }
 
   const computedSignature = crypto
@@ -106,7 +106,7 @@ app.post('/payload', async (req, res) => {
 
   if (computedSignature !== signature) {
     console.error('❌ Signature tidak valid:', computedSignature, '!=', signature);
-    return res.status(401).json({ error: 'Invalid signature' });
+    return res.status(401).json({ status: 'error', message: 'Invalid signature', data: {} });
   }
 
   console.log('✅ Signature valid');
@@ -114,11 +114,14 @@ app.post('/payload', async (req, res) => {
   if (req.body.data) {
     const data = req.body.data;
     if (eventType === 'create') {
+      console.log('📥 Create event received from Digiflazz');
+      console.log('🔍 Checking ref_id_digiflazz:', data.ref_id);
       if (data.status === 'berhasil' || data.status === 'gagal') {
+        console.log('✅ Status is final, saving to Supabase with ref_id_digiflazz:', data.ref_id);
         const { error } = await supabase.from('transaksi_digiflazz').insert([
           {
             ref_id: data.buyer_tx_id, // ref_id buatan kita
-            ref_id_digiflazz: data.ref_id || '', // ref_id dari Digiflazz
+            ref_id_digiflazz: data.ref_id, // ref_id dari Digiflazz
             buyer_tx_id: data.buyer_tx_id,
             customer_no: data.customer_no,
             buyer_sku_code: data.buyer_sku_code,
@@ -152,10 +155,12 @@ app.post('/payload', async (req, res) => {
     
       if (!data.buyer_tx_id && !data.ref_id) {
         console.warn('⚠️ buyer_tx_id atau ref_id tidak ditemukan dalam webhook update:', JSON.stringify(data));
-        return res.status(400).json({ error: 'Missing buyer_tx_id or ref_id' });
+        return res.status(400).json({ status: 'error', message: 'Missing buyer_tx_id or ref_id', data: {} });
       }
 
       // Check if transaction exists in Supabase
+      console.log('🔍 Checking for existing transaction in Supabase');
+      console.log('🔍 Checking ref_id_digiflazz:', data.ref_id);
       let existingTransaction = null;
       if (data.buyer_tx_id) {
         const { data: txData, error } = await supabase.from('transaksi_digiflazz')
@@ -213,10 +218,11 @@ app.post('/payload', async (req, res) => {
         // Transaction not found, insert as new if status is berhasil or gagal
         if (data.status === 'berhasil' || data.status === 'gagal') {
           console.log('🆕 Transaction not found in Supabase, inserting as new since status is final');
+          console.log('✅ Saving with ref_id_digiflazz:', data.ref_id);
           const { error } = await supabase.from('transaksi_digiflazz').insert([
             {
               ref_id: data.buyer_tx_id, // ref_id buatan kita
-              ref_id_digiflazz: data.ref_id, // Explicitly save ref_id_digiflazz
+              ref_id_digiflazz: data.ref_id, // ref_id dari Digiflazz
               buyer_tx_id: data.buyer_tx_id,
               customer_no: data.customer_no || '',
               buyer_sku_code: data.buyer_sku_code || '',
@@ -247,17 +253,17 @@ app.post('/payload', async (req, res) => {
       console.log('⚠️ Unsupported event type:', eventType);
     }
 
-    res.json({ success: true });
+    res.status(200).json({ status: 'success', message: 'Webhook received successfully', data: {} });
   } else {
     console.log('❌ No data in payload');
-    res.status(400).json({ error: 'No data in payload' });
+    res.status(400).json({ status: 'error', message: 'No data in payload', data: {} });
   }
 });
 
 // Webhook test proxy route
 app.post('/api/test-webhook-proxy', async (req, res) => {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ status: 'error', message: 'Method not allowed', data: {} });
   }
 
   try {
@@ -292,24 +298,24 @@ app.post('/api/test-webhook-proxy', async (req, res) => {
         try {
           const parsedData = JSON.parse(data || '{}');
           if (response.statusCode >= 200 && response.statusCode < 300) {
-            res.status(200).json({ message: 'Webhook test successful', data: parsedData });
+            res.status(200).json({ status: 'success', message: 'Webhook test successful', data: parsedData });
           } else {
-            res.status(response.statusCode).json({ error: 'Failed to test webhook', details: parsedData });
+            res.status(response.statusCode).json({ status: 'error', message: 'Failed to test webhook', data: parsedData });
           }
         } catch (err) {
-          res.status(500).json({ error: 'Invalid JSON response from Digiflazz', raw: data });
+          res.status(500).json({ status: 'error', message: 'Invalid JSON response from Digiflazz', data: data });
         }
       });
     });
 
     proxyReq.on('error', (err) => {
-      res.status(500).json({ error: 'Request failed', detail: err.message });
+      res.status(500).json({ status: 'error', message: 'Request failed', data: err.message });
     });
 
     proxyReq.write(postData);
     proxyReq.end();
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ status: 'error', message: err.message, data: {} });
   }
 });
 

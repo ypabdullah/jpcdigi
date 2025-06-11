@@ -4,8 +4,8 @@ const config = {
   digiflazz: {
     baseUrl: import.meta.env.VITE_DIGIFLAZZ_BASE_URL || 'https://api.digiflazz.com/v1',
     username: import.meta.env.VITE_DIGIFLAZZ_USERNAME || 'vatuviWmrQGg', // Replace with your actual username
-    apiKey: import.meta.env.VITE_DIGIFLAZZ_API_KEY || 'dev-f0fbd220-4113-11f0-88e0-4582a8959ef0', // Replace with your actual API key
-    useTestMode: import.meta.env.MODE !== 'development', // Auto use test mode in dev environments
+    apiKey: import.meta.env.VITE_DIGIFLAZZ_API_KEY || 'd5271510-8de5-5767-b6cb-b252090c57ae', // Replace with your actual API key
+    useTestMode: import.meta.env.MODE !== 'production', // Auto use test mode in dev environments
   },
   
   // Application Identifiers

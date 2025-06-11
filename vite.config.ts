@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => ({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8888/.netlify/functions',
+        target: 'http://202.10.44.157:5173/.netlify/functions',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '/digiflazz-proxy'),
       },
