@@ -1,0 +1,10 @@
+diff --git a/dist/module/RealtimeClient.js b/dist/module/RealtimeClient.js
+index 5d2f3a5..7b4f3b2 100644
+--- a/dist/module/RealtimeClient.js
++++ b/dist/module/RealtimeClient.js
+@@ -1,5 +1,5 @@
+ import { v4 as uuidv4 } from 'uuid';
+-import { WebSocket } from './WebSocket';
++import { WebSocket } from 'ws';
+ import { REALTIME_LISTEN_TYPES, REALTIME_POSTGRES_CHANGES_LISTEN_EVENT, REALTIME_PRESENCE_LISTEN_EVENTS, REALTIME_SUBSCRIBE_STATES, } from './constants';
+ import { RealtimePresence } from './RealtimePresence';
