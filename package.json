@@ -10,8 +10,7 @@
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "insert-telkomsel": "node insert-telkomsel-products.js",
-    "start": "node server.js",
-    // "postinstall": "patch-package"
+    "start": "node server.js"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
