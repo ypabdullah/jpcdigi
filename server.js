@@ -7,6 +7,12 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 
+const DIGIFLAZZ_BASE_URL = 'https://api.digiflazz.com';
+
+const generateSignature = (username, apiKey, value) => {
+  return crypto.createHash('md5').update(username + apiKey + value).digest('hex');
+};
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 dotenv.config();
@@ -18,6 +24,18 @@ const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// CORS middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.status(200).json({ message: 'Preflight request successful' });
+  } else {
+    next();
+  }
+});
+
 app.use(bodyParser.json({ type: 'application/json' }));
 
 // Store pending transactions for status checking
@@ -28,12 +46,20 @@ function pollDigiflazzStatus(refId, buyerTxId) {
   const interval = setInterval(async () => {
     try {
       console.log(`🔄 Polling status for ref_id: ${refId} or buyer_tx_id: ${buyerTxId}`);
+      
+      // Generate signature
+      const signValue = `status_${refId || buyerTxId}`;
+      const sign = crypto
+        .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+        .update(signValue)
+        .digest('hex');
+
       const response = await fetch(`https://api.digiflazz.com/v1/transaction-status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           username: process.env.DIGIFLAZZ_USERNAME,
-          api_key: process.env.DIGIFLAZZ_API_KEY,
+          sign: sign,
           ref_id: refId || buyerTxId 
         })
       });
@@ -44,8 +70,7 @@ function pollDigiflazzStatus(refId, buyerTxId) {
         const data = result.data;
         const { error } = await supabase.from('transaksi_digiflazz').insert([
           {
-            ref_id_internal: data.buyer_tx_id || buyerTxId,
-            ref_id_digiflazz: data.ref_id || refId,
+            ref_id: data.ref_id || refId,
             customer_no: data.customer_no,
             buyer_sku_code: data.buyer_sku_code,
             status: data.status,
@@ -87,34 +112,150 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 app.use(express.static(join(__dirname, 'dist')));
 
 // Digiflazz proxy endpoints
-app.post('/digiflazz-proxy/v1/cek-saldo', async (req, res) => {
+app.post('/digiflazz-proxy/*', async (req, res) => {
   try {
-    console.log('🚀 Proxying saldo check request to Digiflazz');
+    console.log('🚀 Proxying request to Digiflazz');
+    
+    // Get request body
+    const body = req.body || {};
+    const path = req.path.replace('/digiflazz-proxy', '');
+
+    if (!process.env.DIGIFLAZZ_USERNAME || !process.env.DIGIFLAZZ_API_KEY) {
+      return res.status(500).json({ 
+        status: 'error', 
+        message: 'Missing Digiflazz credentials' 
+      });
+    }
+
+    // Generate signature based on path and request
+    const signValue = path === '/v1/transaction-history' ? 'history' : body.ref_id || body.command || '';
+    const sign = generateSignature(process.env.DIGIFLAZZ_USERNAME, process.env.DIGIFLAZZ_API_KEY, signValue);
+
+    const apiRequestBody = {
+      username: process.env.DIGIFLAZZ_USERNAME,
+      buyer_sku_code: body.buyer_sku_code,
+      customer_no: body.customer_no,
+      ref_id: body.ref_id,
+      sign: sign
+    };
+
+    console.log('Payload dikirim ke Digiflazz:', JSON.stringify(apiRequestBody, null, 2));
+
+    const response = await fetch(`${DIGIFLAZZ_BASE_URL}${path}`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(apiRequestBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Digiflazz API Error:', response.status, errorText);
+      throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    // Special handling for PLN inquiry
+    if (path.includes('/v1/inquiry-pln')) {
+      return res.status(200).json({
+        data: {
+          status: data.data?.status || 'Gagal',
+          message: data.data?.message || 'No message',
+          customer_no: data.data?.customer_no || body.customer_no,
+          meter_no: data.data?.meter_no || 'N/A',
+          subscriber_id: data.data?.subscriber_id || 'N/A',
+          name: data.data?.name || 'N/A',
+          segment_power: data.data?.segment_power || 'N/A',
+          rc: data.data?.rc || 'N/A'
+        }
+      });
+    }
+
+    console.log('✅ Digiflazz response:', data);
+    res.status(200).json(data);
+
+  } catch (error) {
+    console.error('❌ Error:', error);
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Internal Server Error', 
+      error: error.message 
+    });
+  }
+});
+
+app.post('/digiflazz-proxy/v1/transaction', async (req, res) => {
+  try {
+    console.log('🚀 Proxying transaction request to Digiflazz');
+    
+    // Get request body
+    const body = req.body;
     
     // Generate signature
-    const signValue = 'saldo';
+    const signValue = body.command || 'transaction';
     const sign = crypto
       .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
       .digest('hex');
 
-    const response = await fetch('https://api.digiflazz.com/v1/cek-saldo', {
+    const response = await fetch('https://api.digiflazz.com/v1/transaction', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         username: process.env.DIGIFLAZZ_USERNAME,
+        command: body.command,
+        customer_no: body.customer_no,
+        buyer_sku_code: body.buyer_sku_code,
         sign: sign
       })
     });
 
     const result = await response.json();
-    console.log('✅ Saldo check response:', result);
+    console.log('✅ Transaction response:', result);
     res.status(200).json(result);
   } catch (error) {
-    console.error('❌ Error proxying saldo check:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to check saldo', data: {} });
+    console.error('❌ Error proxying transaction:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to process transaction', data: {} });
+  }
+});
+
+app.post('/digiflazz-proxy/v1/inquiry-pln', async (req, res) => {
+  try {
+    console.log('🚀 Proxying PLN inquiry request to Digiflazz');
+    
+    // Get request body
+    const body = req.body;
+    
+    // Generate signature
+    const signValue = body.command || 'inquiry';
+    const sign = crypto
+      .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(signValue)
+      .digest('hex');
+
+    const response = await fetch('https://api.digiflazz.com/v1/inquiry-pln', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        command: body.command,
+        customer_no: body.customer_no,
+        sign: sign
+      })
+    });
+
+    const result = await response.json();
+    console.log('✅ PLN inquiry response:', result);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('❌ Error proxying PLN inquiry:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to process PLN inquiry', data: {} });
   }
 });
 
@@ -156,16 +297,21 @@ app.post('/digiflazz-proxy/v1/price-list', async (req, res) => {
 app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
   try {
     console.log('🚀 Proxying transaction-history request to Digiflazz');
+    console.log('Request body:', req.body);
     
     // Get request body
     const body = req.body;
     
     // Generate signature based on request body
     const signValue = body.command || 'history';
+    console.log('Using sign value:', signValue);
+    
     const sign = crypto
       .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
       .digest('hex');
+
+    console.log('Generated sign:', sign);
 
     const response = await fetch('https://api.digiflazz.com/v1/transaction-history', {
       method: 'POST',
@@ -181,10 +327,31 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
 
     const result = await response.json();
     console.log('✅ Transaction-history response:', result);
+    
+    // Check if response contains error
+    if (result.status && result.status !== 'success') {
+      console.error('❌ Digiflazz returned error:', result);
+      return res.status(500).json({ 
+        status: 'error', 
+        message: result.message || 'Failed to fetch transaction history', 
+        data: result.data || {} 
+      });
+    }
+
     res.status(200).json(result);
   } catch (error) {
     console.error('❌ Error proxying transaction-history:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to fetch transaction history', data: {} });
+    
+    // Try to get more details about the error
+    if (error.response && error.response.data) {
+      console.error('Error response:', error.response.data);
+    }
+    
+    res.status(500).json({ 
+      status: 'error', 
+      message: error.message || 'Failed to fetch transaction history', 
+      data: error.response?.data || {} 
+    });
   }
 });
 
