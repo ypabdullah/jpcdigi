@@ -12,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 5173;
+const port = process.env.PORT || 80;
 const secret = process.env.SECRET_WEBHOOK;
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
@@ -120,7 +120,7 @@ app.post('/payload', async (req, res) => {
     }
 
     const data = req.body.data;
-    const transactionId = data.ref_id;
+    const transactionId = data.buyer_tx_id || data.ref_id;
 
     if (!transactionId) {
       console.error('❌ Missing transaction identifier');
@@ -135,7 +135,7 @@ app.post('/payload', async (req, res) => {
       const { data: existingTx, error: checkError } = await supabase
         .from('transaksi_digiflazz')
         .select('*')
-        .eq('ref_id', data.ref_id)
+        .or(`ref_id_digiflazz.eq.${data.ref_id},ref_id_internal.eq.${data.buyer_tx_id}`)
         .single();
 
       if (checkError) {
@@ -155,7 +155,7 @@ app.post('/payload', async (req, res) => {
             sn: data.sn || '',
             updated_at: new Date().toISOString()
           })
-          .eq('ref_id', data.ref_id);
+          .eq('id', existingTx.id);
 
         if (updateError) {
           console.error('❌ Error updating transaction:', updateError.message);
@@ -169,7 +169,8 @@ app.post('/payload', async (req, res) => {
       // Insert new transaction
       const { error: insertError } = await supabase.from('transaksi_digiflazz').insert([
         {
-          ref_id: data.ref_id,
+          ref_id_internal: data.buyer_tx_id,
+          ref_id_digiflazz: data.ref_id,
           customer_no: data.customer_no,
           buyer_sku_code: data.buyer_sku_code,
           status: data.status,
@@ -207,7 +208,7 @@ app.post('/payload', async (req, res) => {
           sn: data.sn || '',
           updated_at: new Date().toISOString()
         })
-        .eq('ref_id', data.ref_id);
+        .or(`ref_id_digiflazz.eq.${data.ref_id},ref_id_internal.eq.${data.buyer_tx_id}`);
 
       if (updateError) {
         console.error('❌ Error updating transaction:', updateError.message);
