@@ -1,9 +1,8 @@
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-
 import express from 'express';
 import bodyParser from 'body-parser';
-import http from 'http'; // Tetap http, bukan https
+import http from 'http';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
@@ -13,7 +12,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 80;
+const port = process.env.PORT || 5173;
 const secret = process.env.SECRET_WEBHOOK;
 const supabaseUrl = process.env.SUPABASE_URL || '';
 const supabaseKey = process.env.SUPABASE_ANON_KEY || '';
@@ -29,14 +28,12 @@ function pollDigiflazzStatus(refId, buyerTxId) {
   const interval = setInterval(async () => {
     try {
       console.log(`🔄 Polling status for ref_id: ${refId} or buyer_tx_id: ${buyerTxId}`);
-      // Replace with actual API call to Digiflazz to check status
-      // This is a placeholder for the API request
       const response = await fetch(`https://api.digiflazz.com/v1/transaction-status`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          username: process.env.DIGIFLAZZ_USERNAME || 'vatuviWmrQGg',
-          api_key: process.env.DIGIFLAZZ_API_KEY || 'd5271510-8de5-5767-b6cb-b252090c57ae',
+          username: process.env.DIGIFLAZZ_USERNAME,
+          api_key: process.env.DIGIFLAZZ_API_KEY,
           ref_id: refId || buyerTxId 
         })
       });
@@ -47,28 +44,26 @@ function pollDigiflazzStatus(refId, buyerTxId) {
         const data = result.data;
         const { error } = await supabase.from('transaksi_digiflazz').insert([
           {
-            ref_id: data.buyer_tx_id || buyerTxId,
+            ref_id_internal: data.buyer_tx_id || buyerTxId,
             ref_id_digiflazz: data.ref_id || refId,
-            buyer_tx_id: data.buyer_tx_id || buyerTxId,
-            customer_no: data.customer_no || '',
-            buyer_sku_code: data.buyer_sku_code || '',
+            customer_no: data.customer_no,
+            buyer_sku_code: data.buyer_sku_code,
             status: data.status,
-            message: data.message || '',
-            rc: data.rc || '',
-            sn: data.sn || '',
-            price: data.price || 0,
-            buyer_last_saldo: data.buyer_last_saldo || 0,
-            tele: data.tele || '',
-            wa: data.wa || ''
+            message: data.message,
+            rc: data.rc,
+            sn: data.sn,
+            price: data.price,
+            buyer_last_saldo: data.buyer_last_saldo,
+            tele: data.tele,
+            wa: data.wa,
+            transaction_date: new Date().toISOString()
           }
         ]);
 
         if (error) {
           console.error('❌ Error saving to Supabase after polling:', error.message);
-          console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
         } else {
           console.log('✅ Transaction saved to Supabase after polling');
-          console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
         }
         clearInterval(interval);
         pendingTransactions.delete(refId || buyerTxId);
@@ -77,7 +72,6 @@ function pollDigiflazzStatus(refId, buyerTxId) {
       }
     } catch (err) {
       console.error('❌ Error polling Digiflazz API:', err.message);
-      console.error('📛 Detailed Error:', JSON.stringify(err, null, 2));
     }
   }, 30000); // Poll every 30 seconds
 
@@ -93,177 +87,144 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 app.use(express.static(join(__dirname, 'dist')));
 
 app.post('/payload', async (req, res) => {
-  console.log('📩 Webhook diterima:', new Date().toISOString());
-  console.log('Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('Body:', JSON.stringify(req.body, null, 2));
+  try {
+    console.log('📩 Webhook diterima:', new Date().toISOString());
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
 
-  const eventType = req.body.event || 'unknown';
-  console.log('Event Type:', eventType);
+    const eventType = req.body.event || 'unknown';
+    console.log('Event Type:', eventType);
 
-  const signature = req.headers['x-digiflazz-signature'];
-  if (!signature) {
-    console.error('❌ Tidak ada signature di header');
-    return res.status(401).json({ status: 'error', message: 'No signature provided', data: {} });
-  }
+    // Validate signature
+    const signature = req.headers['x-digiflazz-signature'];
+    if (!signature) {
+      console.error('❌ Tidak ada signature di header');
+      return res.status(401).json({ status: 'error', message: 'No signature provided', data: {} });
+    }
 
-  const computedSignature = crypto
-    .createHmac('sha1', secret)
-    .update(JSON.stringify(req.body))
-    .digest('hex');
+    const computedSignature = crypto
+      .createHmac('sha1', secret)
+      .update(JSON.stringify(req.body))
+      .digest('hex');
 
-  if (computedSignature !== signature) {
-    console.error('❌ Signature tidak valid:', computedSignature, '!=', signature);
-    return res.status(401).json({ status: 'error', message: 'Invalid signature', data: {} });
-  }
+    if (computedSignature !== signature) {
+      console.error('❌ Signature tidak valid:', computedSignature, '!=', signature);
+      return res.status(401).json({ status: 'error', message: 'Invalid signature', data: {} });
+    }
 
-  console.log('✅ Signature valid');
+    console.log('✅ Signature valid');
 
-  if (req.body.data) {
+    if (!req.body.data) {
+      console.error('❌ No data in payload');
+      return res.status(400).json({ status: 'error', message: 'No data in payload', data: {} });
+    }
+
     const data = req.body.data;
+    const transactionId = data.ref_id;
+
+    if (!transactionId) {
+      console.error('❌ Missing transaction identifier');
+      return res.status(400).json({ status: 'error', message: 'Missing transaction identifier', data: {} });
+    }
+
+    // Handle create event
     if (eventType === 'create') {
       console.log('📥 Create event received from Digiflazz');
-      console.log('🔍 Checking ref_id_digiflazz:', data.ref_id);
-      if (data.status === 'berhasil' || data.status === 'gagal') {
-        console.log('✅ Status is final, saving to Supabase with ref_id_digiflazz:', data.ref_id);
-        const { error } = await supabase.from('transaksi_digiflazz').insert([
-          {
-            ref_id: data.buyer_tx_id, // ref_id buatan kita
-            ref_id_digiflazz: data.ref_id, // ref_id dari Digiflazz
-            buyer_tx_id: data.buyer_tx_id,
-            customer_no: data.customer_no,
-            buyer_sku_code: data.buyer_sku_code,
+      
+      // Check if transaction already exists
+      const { data: existingTx, error: checkError } = await supabase
+        .from('transaksi_digiflazz')
+        .select('*')
+        .eq('ref_id', data.ref_id)
+        .single();
+
+      if (checkError) {
+        console.error('❌ Error checking existing transaction:', checkError.message);
+        return res.status(500).json({ status: 'error', message: 'Database error', data: {} });
+      }
+
+      if (existingTx) {
+        console.log('🔄 Transaction already exists, updating status');
+        // Update existing transaction
+        const { error: updateError } = await supabase
+          .from('transaksi_digiflazz')
+          .update({
             status: data.status,
             message: data.message,
             rc: data.rc,
             sn: data.sn || '',
-            price: data.price,
-            buyer_last_saldo: data.buyer_last_saldo,
-            tele: data.tele,
-            wa: data.wa
-          }
-        ]);
+            updated_at: new Date().toISOString()
+          })
+          .eq('ref_id', data.ref_id);
 
-        if (error) {
-          console.error('❌ Error saving to Supabase:', error.message);
-          console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
-        } else {
-          console.log('✅ Transaction created in Supabase');
-          console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
+        if (updateError) {
+          console.error('❌ Error updating transaction:', updateError.message);
+          return res.status(500).json({ status: 'error', message: 'Failed to update transaction', data: {} });
         }
-      } else {
-        console.log('⏳ Transaction not saved to Supabase: Status is pending. Waiting for final status from Digiflazz.');
-        console.log('📌 Data received:', JSON.stringify(data, null, 2));
-        pendingTransactions.set(data.ref_id || data.buyer_tx_id, { ref_id: data.ref_id, buyer_tx_id: data.buyer_tx_id });
-        pollDigiflazzStatus(data.ref_id, data.buyer_tx_id);
-      }
-    } else if (eventType === 'update') {
-      console.log('🔁 Webhook update diterima');
-      console.log('📌 Data update:', JSON.stringify(data, null, 2));
-    
-      if (!data.buyer_tx_id && !data.ref_id) {
-        console.warn('⚠️ buyer_tx_id atau ref_id tidak ditemukan dalam webhook update:', JSON.stringify(data));
-        return res.status(400).json({ status: 'error', message: 'Missing buyer_tx_id or ref_id', data: {} });
+
+        console.log('✅ Transaction updated successfully');
+        return res.status(200).json({ status: 'success', message: 'Transaction updated', data: {} });
       }
 
-      // Check if transaction exists in Supabase
-      console.log('🔍 Checking for existing transaction in Supabase');
-      console.log('🔍 Checking ref_id_digiflazz:', data.ref_id);
-      let existingTransaction = null;
-      if (data.buyer_tx_id) {
-        const { data: txData, error } = await supabase.from('transaksi_digiflazz')
-          .select('*')
-          .eq('ref_id_internal', data.buyer_tx_id)
-          .single();
-        if (error) {
-          console.error('❌ Error checking existing transaction by buyer_tx_id:', error.message);
-        } else if (txData) {
-          existingTransaction = txData;
-          console.log('🔍 Found existing transaction by buyer_tx_id:', data.buyer_tx_id);
-        }
-      }
-      if (!existingTransaction && data.ref_id) {
-        const { data: txData, error } = await supabase.from('transaksi_digiflazz')
-          .select('*')
-          .eq('ref_id_digiflazz', data.ref_id)
-          .single();
-        if (error) {
-          console.error('❌ Error checking existing transaction by ref_id:', error.message);
-        } else if (txData) {
-          existingTransaction = txData;
-          console.log('🔍 Found existing transaction by ref_id:', data.ref_id);
-        }
-      }
-
-      if (existingTransaction) {
-        // Update existing transaction
-        let query = supabase.from('transaksi_digiflazz').update({
+      // Insert new transaction
+      const { error: insertError } = await supabase.from('transaksi_digiflazz').insert([
+        {
+          ref_id: data.ref_id,
+          customer_no: data.customer_no,
+          buyer_sku_code: data.buyer_sku_code,
           status: data.status,
           message: data.message,
-          sn: data.sn || '',
           rc: data.rc,
+          sn: data.sn || '',
+          price: data.price,
           buyer_last_saldo: data.buyer_last_saldo,
-          ref_id_digiflazz: data.ref_id // Explicitly save ref_id_digiflazz
-        });
-
-        if (data.buyer_tx_id) {
-          query = query.eq('ref_id_internal', data.buyer_tx_id);
-          console.log('🔍 Matching update with ref_id_internal (buyer_tx_id):', data.buyer_tx_id);
-        } else if (data.ref_id) {
-          query = query.eq('ref_id_digiflazz', data.ref_id);
-          console.log('🔍 Matching update with ref_id_digiflazz:', data.ref_id);
+          tele: data.tele,
+          wa: data.wa,
+          transaction_date: new Date().toISOString()
         }
+      ]);
 
-        const { error } = await query;
-        if (error) {
-          console.error('❌ Error updating Supabase:', error.message);
-          console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
-        } else {
-          console.log('✅ Transaction updated in Supabase');
-          console.log('📝 Data updated:', JSON.stringify(data, null, 2));
-        }
-      } else {
-        // Transaction not found, insert as new if status is berhasil or gagal
-        if (data.status === 'berhasil' || data.status === 'gagal') {
-          console.log('🆕 Transaction not found in Supabase, inserting as new since status is final');
-          console.log('✅ Saving with ref_id_digiflazz:', data.ref_id);
-          const { error } = await supabase.from('transaksi_digiflazz').insert([
-            {
-              ref_id: data.buyer_tx_id, // ref_id buatan kita
-              ref_id_digiflazz: data.ref_id, // ref_id dari Digiflazz
-              buyer_tx_id: data.buyer_tx_id,
-              customer_no: data.customer_no || '',
-              buyer_sku_code: data.buyer_sku_code || '',
-              status: data.status,
-              message: data.message || '',
-              rc: data.rc || '',
-              sn: data.sn || '',
-              price: data.price || 0,
-              buyer_last_saldo: data.buyer_last_saldo || 0,
-              tele: data.tele || '',
-              wa: data.wa || ''
-            }
-          ]);
-
-          if (error) {
-            console.error('❌ Error inserting new transaction to Supabase:', error.message);
-            console.error('📛 Detailed Error:', JSON.stringify(error, null, 2));
-          } else {
-            console.log('✅ New transaction inserted into Supabase');
-            console.log('🧾 Data inserted:', JSON.stringify(data, null, 2));
-          }
-        } else {
-          console.log('⏳ Update received but status is still pending, not inserting into Supabase yet');
-          console.log('📌 Data received:', JSON.stringify(data, null, 2));
-        }
+      if (insertError) {
+        console.error('❌ Error saving to Supabase:', insertError.message);
+        return res.status(500).json({ status: 'error', message: 'Failed to save transaction', data: {} });
       }
-    } else {
-      console.log('⚠️ Unsupported event type:', eventType);
+
+      console.log('✅ Transaction created in Supabase');
+      return res.status(200).json({ status: 'success', message: 'Transaction created', data: {} });
     }
 
-    res.status(200).json({ status: 'success', message: 'Webhook received successfully', data: {} });
-  } else {
-    console.log('❌ No data in payload');
-    res.status(400).json({ status: 'error', message: 'No data in payload', data: {} });
+    // Handle update event
+    if (eventType === 'update') {
+      console.log('🔁 Webhook update diterima');
+      
+      // Update existing transaction
+      const { error: updateError } = await supabase
+        .from('transaksi_digiflazz')
+        .update({
+          status: data.status,
+          message: data.message,
+          rc: data.rc,
+          sn: data.sn || '',
+          updated_at: new Date().toISOString()
+        })
+        .eq('ref_id', data.ref_id);
+
+      if (updateError) {
+        console.error('❌ Error updating transaction:', updateError.message);
+        return res.status(500).json({ status: 'error', message: 'Failed to update transaction', data: {} });
+      }
+
+      console.log('✅ Transaction updated successfully');
+      return res.status(200).json({ status: 'success', message: 'Transaction updated', data: {} });
+    }
+
+    // Handle unknown event type
+    console.warn('⚠️ Unknown event type:', eventType);
+    return res.status(200).json({ status: 'warning', message: 'Unknown event type', data: {} });
+
+  } catch (error) {
+    console.error('❌ Error processing webhook:', error);
+    return res.status(500).json({ status: 'error', message: 'Internal server error', data: {} });
   }
 });
 
@@ -274,58 +235,27 @@ app.post('/api/test-webhook-proxy', async (req, res) => {
   }
 
   try {
-    const { username, ref_id, sign, webhook_url, webhook_id, use_ping_endpoint } = req.body;
-
-    let endpoint = 'https://api.digiflazz.com/v1/webhook-test';
-    if (use_ping_endpoint && webhook_id) {
-      endpoint = `https://api.digiflazz.com/v1/report/hooks/${webhook_id}/pings`;
-    }
-
-    const postData = JSON.stringify({
-      username,
-      ref_id,
-      sign,
-      webhook_url
-    });
-
-    const options = {
-      hostname: 'api.digiflazz.com',
-      path: endpoint.replace('https://api.digiflazz.com', ''),
+    const { data: webhookData } = req.body;
+    console.log('🚀 Forwarding webhook test to Digiflazz:', webhookData);
+    
+    const response = await fetch('https://api.digiflazz.com/v1/transaction-status', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-
-    const proxyReq = http.request(options, (response) => {
-      let data = '';
-      response.on('data', chunk => (data += chunk));
-      response.on('end', () => {
-        try {
-          const parsedData = JSON.parse(data || '{}');
-          if (response.statusCode >= 200 && response.statusCode < 300) {
-            res.status(200).json({ status: 'success', message: 'Webhook test successful', data: parsedData });
-          } else {
-            res.status(response.statusCode).json({ status: 'error', message: 'Failed to test webhook', data: parsedData });
-          }
-        } catch (err) {
-          res.status(500).json({ status: 'error', message: 'Invalid JSON response from Digiflazz', data: data });
-        }
-      });
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(webhookData)
     });
 
-    proxyReq.on('error', (err) => {
-      res.status(500).json({ status: 'error', message: 'Request failed', data: err.message });
-    });
-
-    proxyReq.write(postData);
-    proxyReq.end();
-  } catch (err) {
-    res.status(500).json({ status: 'error', message: err.message, data: {} });
+    const result = await response.json();
+    console.log('✅ Webhook test response:', result);
+    
+    res.status(200).json({ status: 'success', message: 'Webhook test forwarded', data: result });
+  } catch (error) {
+    console.error('❌ Error forwarding webhook test:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to forward webhook test', data: {} });
   }
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`✅ Webhook server berjalan di http://0.0.0.0:${port}/payload`);
+const server = http.createServer(app);
+
+server.listen(port, () => {
+  console.log(`🚀 Server berjalan di http://localhost:${port}`);
 });
