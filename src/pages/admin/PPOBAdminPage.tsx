@@ -757,7 +757,7 @@ export default function PPOBAdminPage() {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {supabaseTransactions.map((transaction) => (
-                    <tr key={transaction.id}>
+                    <tr key={transaction.id || `transaction-${transaction.ref_id}`}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{transaction.ref_id || '-'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.customer_no || '-'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.buyer_sku_code || '-'}</td>
