@@ -27,6 +27,7 @@ exports.handler = async function(event, context) {
   try {
     const requestBody = JSON.parse(event.body || '{}');
     const credentials = await getActiveDigiflazzCredentials();
+    const digiflazzPath = event.path.replace('/digiflazz-proxy', '');
 
     if (!credentials || !credentials.username || !credentials.apiKey) {
       return {
@@ -36,57 +37,24 @@ exports.handler = async function(event, context) {
       };
     }
 
-    const path = event.path.replace('/.netlify/functions/digiflazz-proxy', '');
-    const endpoint = path || '/v1/price-list';
-
-    let signData = '';
-
-    if (event.path.includes('/v1/price-list')) {
-      signData = credentials.username + credentials.apiKey + 'pricelist';
-    } else if (event.path.includes('/v1/transaction')) {
-      // ✅ SIGNATURE untuk transaksi PPOB pakai ref_id, BUKAN cmd
-      if (!requestBody.ref_id) {
-        return {
-          statusCode: 400,
-          headers,
-          body: JSON.stringify({ message: 'Missing ref_id in request body' }),
-        };
-      }
-      signData = credentials.username + credentials.apiKey + requestBody.ref_id;
-    } else if (event.path.includes('/v1/transaction-history')) {
-      signData = credentials.username + credentials.apiKey + 'history';
-    } else if (event.path.includes('/v1/inquiry-pln')) {
-      signData = credentials.username + credentials.apiKey + requestBody.customer_no;
-      console.log('Inquiry PLN request body:', JSON.stringify(requestBody));
-    } else {
-      const fallback = event.path.split('/').pop() || 'unknown';
-      signData = credentials.username + credentials.apiKey + fallback;
-    }
-
-    const generateSignature = (username, apiKey, value) => {
-      return crypto.createHash('md5').update(username + apiKey + value).digest('hex');
-    };
-    
-    const sign = generateSignature(credentials.username, credentials.apiKey, requestBody.ref_id);
-
-    // ✅ Jaga agar ref_id tidak tertimpa oleh ...requestBody
-    const { ref_id } = requestBody;
+    const signValue = digiflazzPath === '/v1/transaction-history' ? 'history' : requestBody.ref_id || requestBody.command || '';
 
     const apiRequestBody = {
       username: credentials.username,
       buyer_sku_code: requestBody.buyer_sku_code,
       customer_no: requestBody.customer_no,
-      ref_id: requestBody.ref_id, // ⬅️ WAJIB ADA agar tidak dianggap buyer_trx_id
-      sign
+      ref_id: requestBody.ref_id,
+      sign: generateSignature(credentials.username, credentials.apiKey, signValue)
     };
-    
 
     console.log('Payload dikirim ke Digiflazz:', JSON.stringify(apiRequestBody, null, 2));
 
-    const response = await fetch(`${DIGIFLAZZ_BASE_URL}${endpoint}`, {
+    const response = await fetch(`${DIGIFLAZZ_BASE_URL}${digiflazzPath}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(apiRequestBody),
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(apiRequestBody)
     });
 
     if (!response.ok) {
