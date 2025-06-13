@@ -86,6 +86,69 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 
 app.use(express.static(join(__dirname, 'dist')));
 
+// Digiflazz proxy endpoints
+app.post('/digiflazz-proxy/v1/price-list', async (req, res) => {
+  try {
+    console.log('🚀 Proxying price-list request to Digiflazz');
+    
+    // Generate signature
+    const signValue = 'price-list';
+    const sign = crypto
+      .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(signValue)
+      .digest('hex');
+
+    const response = await fetch('https://api.digiflazz.com/v1/price-list', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        sign: sign
+      })
+    });
+
+    const result = await response.json();
+    console.log('✅ Price-list response:', result);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('❌ Error proxying price-list:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch price list', data: {} });
+  }
+});
+
+app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
+  try {
+    console.log('🚀 Proxying transaction-history request to Digiflazz');
+    
+    // Generate signature
+    const signValue = 'history';
+    const sign = crypto
+      .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(signValue)
+      .digest('hex');
+
+    const response = await fetch('https://api.digiflazz.com/v1/transaction-history', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        sign: sign
+      })
+    });
+
+    const result = await response.json();
+    console.log('✅ Transaction-history response:', result);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('❌ Error proxying transaction-history:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch transaction history', data: {} });
+  }
+});
+
 app.post('/payload', async (req, res) => {
   try {
     console.log('📩 Webhook diterima:', new Date().toISOString());
