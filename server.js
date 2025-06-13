@@ -721,6 +721,6 @@ const setupCronJobs = () => {
 const server = http.createServer(app);
 
 server.listen(port, () => {
-  console.log(`🚀 Server berjalan di http://${process.env.HOST || 'localhost'}:${port}`);
+  console.log(`🚀 Server berjalan di http://${process.env.HOST || '202.10.44.157'}:${port}`);
   setupCronJobs();
 });
