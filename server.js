@@ -112,13 +112,13 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 app.use(express.static(join(__dirname, 'dist')));
 
 // Digiflazz proxy endpoints
-app.post('/digiflazz-proxy/:path(*)', async (req, res) => {
+app.post('/digiflazz-proxy/*', async (req, res) => {
   try {
     console.log('🚀 Proxying request to Digiflazz');
     
     // Get request body
     const body = req.body || {};
-    const path = req.params.path;
+    const path = req.path.substring('/digiflazz-proxy'.length);
 
     if (!process.env.DIGIFLAZZ_USERNAME || !process.env.DIGIFLAZZ_API_KEY) {
       return res.status(500).json({ 
