@@ -87,12 +87,46 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 app.use(express.static(join(__dirname, 'dist')));
 
 // Digiflazz proxy endpoints
+app.post('/digiflazz-proxy/v1/cek-saldo', async (req, res) => {
+  try {
+    console.log('🚀 Proxying saldo check request to Digiflazz');
+    
+    // Generate signature
+    const signValue = 'saldo';
+    const sign = crypto
+      .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(signValue)
+      .digest('hex');
+
+    const response = await fetch('https://api.digiflazz.com/v1/cek-saldo', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        sign: sign
+      })
+    });
+
+    const result = await response.json();
+    console.log('✅ Saldo check response:', result);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('❌ Error proxying saldo check:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to check saldo', data: {} });
+  }
+});
+
 app.post('/digiflazz-proxy/v1/price-list', async (req, res) => {
   try {
     console.log('🚀 Proxying price-list request to Digiflazz');
     
-    // Generate signature
-    const signValue = 'price-list';
+    // Get request body
+    const body = req.body;
+    
+    // Generate signature based on request body
+    const signValue = body.command || 'price-list';
     const sign = crypto
       .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
@@ -105,6 +139,7 @@ app.post('/digiflazz-proxy/v1/price-list', async (req, res) => {
       },
       body: JSON.stringify({
         username: process.env.DIGIFLAZZ_USERNAME,
+        command: body.command,
         sign: sign
       })
     });
@@ -122,8 +157,11 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
   try {
     console.log('🚀 Proxying transaction-history request to Digiflazz');
     
-    // Generate signature
-    const signValue = 'history';
+    // Get request body
+    const body = req.body;
+    
+    // Generate signature based on request body
+    const signValue = body.command || 'history';
     const sign = crypto
       .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
@@ -136,6 +174,7 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
       },
       body: JSON.stringify({
         username: process.env.DIGIFLAZZ_USERNAME,
+        command: body.command,
         sign: sign
       })
     });
