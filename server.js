@@ -6,6 +6,33 @@ import http from 'http';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
+import fetch from 'node-fetch';
+import cron from 'node-cron';
+
+// Transaction status constants
+const TRANSACTION_STATUS = {
+  PENDING: 'pending',
+  SUCCESS: 'berhasil',
+  FAILED: 'gagal',
+  TIMEOUT: 'timeout'
+};
+
+// Rate limiting middleware
+const rateLimit = require('express-rate-limit');
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+
+// Required fields validation
+const REQUIRED_FIELDS = ['customer_no', 'buyer_sku_code', 'price'];
+
+const validateTransactionData = (data) => {
+  const missingFields = REQUIRED_FIELDS.filter(field => !data[field]);
+  if (missingFields.length > 0) {
+    throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+  }
+};
 
 const DIGIFLAZZ_BASE_URL = 'https://api.digiflazz.com';
 
@@ -89,6 +116,23 @@ function pollDigiflazzStatus(refId, buyerTxId) {
           console.error('❌ Error saving to Supabase after polling:', error.message);
         } else {
           console.log('✅ Transaction saved to Supabase after polling');
+    
+    // Generate UUID for ref_id if not provided
+    if (!body.ref_id) {
+      const { data: { generate_uuid }, error } = await supabase
+        .rpc('generate_uuid')
+        .single();
+      
+      if (error) {
+        console.error('❌ Error generating UUID:', error);
+        return res.status(500).json({ 
+          status: 'error', 
+          message: 'Failed to generate unique transaction ID' 
+        });
+      }
+      
+      body.ref_id = generate_uuid;
+    }
         }
         clearInterval(interval);
         pendingTransactions.delete(refId || buyerTxId);
@@ -112,13 +156,13 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 app.use(express.static(join(__dirname, 'dist')));
 
 // Digiflazz proxy endpoints
-app.post('/digiflazz-proxy/*', async (req, res) => {
+app.post('/digiflazz-proxy/v1/*', limiter, async (req, res) => {
   try {
     console.log('🚀 Proxying request to Digiflazz');
     
     // Get request body
     const body = req.body || {};
-    const path = req.path.substring('/digiflazz-proxy'.length);
+    const path = req.path.substring('/digiflazz-proxy/v1'.length);
 
     if (!process.env.DIGIFLAZZ_USERNAME || !process.env.DIGIFLAZZ_API_KEY) {
       return res.status(500).json({ 
@@ -230,6 +274,13 @@ app.post('/digiflazz-proxy/v1/inquiry-pln', async (req, res) => {
     // Get request body
     const body = req.body;
     
+    // Validate required fields
+    try {
+      validateTransactionData(body);
+    } catch (error) {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+
     // Generate signature
     const signValue = body.command || 'inquiry';
     const sign = crypto
@@ -355,7 +406,7 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
   }
 });
 
-app.post('/payload', async (req, res) => {
+app.post('/payload', limiter, async (req, res) => {
   try {
     console.log('📩 Webhook diterima:', new Date().toISOString());
     console.log('Headers:', JSON.stringify(req.headers, null, 2));
@@ -520,11 +571,150 @@ app.post('/api/test-webhook-proxy', async (req, res) => {
   } catch (error) {
     console.error('❌ Error forwarding webhook test:', error);
     res.status(500).json({ status: 'error', message: 'Failed to forward webhook test', data: {} });
-  }
 });
 
 const server = http.createServer(app);
 
+const setupCronJobs = () => {
+  // Cron job untuk memeriksa transaksi pending
+  cron.schedule('*/10 * * * *', async () => {
+    console.log('⏱️ Menjalankan cron job untuk memeriksa transaksi pending');
+    
+    try {
+      // Ambil semua transaksi pending
+      const { data: pending, error: fetchError } = await supabase
+        .from('transaksi_digiflazz')
+        .select('*')
+        .eq('status', TRANSACTION_STATUS.PENDING);
+
+      if (fetchError) {
+        console.error('❌ Error fetching pending transactions:', fetchError);
+        return;
+      }
+
+      if (!pending || pending.length === 0) {
+        console.log('✅ Tidak ada transaksi pending yang perlu diperiksa');
+        return;
+      }
+
+      console.log(`🔄 Memeriksa ${pending.length} transaksi pending`);
+
+      // Periksa setiap transaksi pending
+      for (const tx of pending) {
+        try {
+          await pollDigiflazzStatus(tx.ref_id);
+        } catch (error) {
+          console.error(`❌ Error memeriksa transaksi ${tx.ref_id}:`, error);
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ Error dalam cron job:', error);
+    }
+  });
+
+  // Cron job untuk membersihkan transaksi timeout
+  cron.schedule('0 * * * *', async () => {
+    console.log('⏱️ Menjalankan cron job untuk membersihkan transaksi timeout');
+    
+    try {
+      // Ambil semua transaksi yang sudah melewati batas waktu (1 jam)
+      const { data: timeoutTx, error: fetchError } = await supabase
+        .from('transaksi_digiflazz')
+        .select('*')
+        .eq('status', TRANSACTION_STATUS.PENDING)
+        .lt('created_at', new Date(Date.now() - 3600000)) // 1 jam yang lalu
+        .timeout(10000); // Timeout 10 detik
+
+      if (fetchError) {
+        console.error('❌ Error fetching timeout transactions:', fetchError);
+        return;
+      }
+
+      if (!timeoutTx || timeoutTx.length === 0) {
+        console.log('✅ Tidak ada transaksi timeout yang perlu ditangani');
+        return;
+      }
+
+      console.log(`⏰ Menemukan ${timeoutTx.length} transaksi timeout`);
+
+      // Update status menjadi timeout
+      for (const tx of timeoutTx) {
+        try {
+          const { error: updateError } = await supabase
+            .from('transaksi_digiflazz')
+            .update({
+              status: TRANSACTION_STATUS.TIMEOUT,
+              message: 'Transaksi timeout (melebihi 1 jam)'
+            })
+            .eq('ref_id', tx.ref_id);
+
+          if (updateError) {
+            console.error(`❌ Error updating timeout status for ${tx.ref_id}:`, updateError);
+          }
+        } catch (error) {
+          console.error(`❌ Error handling timeout for ${tx.ref_id}:`, error);
+        }
+      }
+
+    } catch (error) {
+      console.error('❌ Error dalam cron job timeout:', error);
+    }
+  });
+
+  // Cron job untuk memperbarui harga produk (setiap hari pukul 03:00)
+  cron.schedule('0 3 * * *', async () => {
+    console.log('⏱️ Menjalankan cron job untuk memperbarui harga produk');
+    
+    try {
+      // Generate signature
+      const signValue = 'price-list';
+      const sign = crypto
+        .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+        .update(signValue)
+        .digest('hex');
+
+      const response = await fetch('https://api.digiflazz.com/v1/price-list', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          username: process.env.DIGIFLAZZ_USERNAME,
+          sign: sign
+        })
+      });
+
+      const result = await response.json();
+      
+      if (result.status === 'success' && result.data) {
+        // Update atau insert harga di Supabase
+        const { error: updateError } = await supabase
+          .from('ppob_products')
+          .upsert(result.data.map(item => ({
+            sku_code: item.sku_code,
+            name: item.name,
+            price: item.price,
+            description: item.description,
+            updated_at: new Date().toISOString()
+          })));
+
+        if (updateError) {
+          console.error('❌ Error updating product prices:', updateError);
+        } else {
+          console.log('✅ Harga produk berhasil diperbarui');
+        }
+      } else {
+        console.error('❌ Failed to fetch price list:', result.message || 'Unknown error');
+      }
+
+    } catch (error) {
+      console.error('❌ Error dalam cron job price list:', error);
+    }
+  });
+};
+
 server.listen(port, () => {
-  console.log(`🚀 Server berjalan di http://202.10.44.157:${port}`);
+  console.log(`🚀 Server berjalan di http://${process.env.HOST || 'localhost'}:${port}`);
+  setupCronJobs();
 });
