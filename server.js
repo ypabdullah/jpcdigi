@@ -18,7 +18,7 @@ const TRANSACTION_STATUS = {
 };
 
 // Rate limiting middleware
-const rateLimit = require('express-rate-limit');
+import rateLimit from 'express-rate-limit';
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100 // limit each IP to 100 requests per windowMs
@@ -156,13 +156,13 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 app.use(express.static(join(__dirname, 'dist')));
 
 // Digiflazz proxy endpoints
-app.post('/digiflazz-proxy/v1/*', limiter, async (req, res) => {
+app.post('/digiflazz-proxy/v1/:endpoint', limiter, async (req, res) => {
   try {
     console.log('🚀 Proxying request to Digiflazz');
     
     // Get request body
     const body = req.body || {};
-    const path = req.path.substring('/digiflazz-proxy/v1'.length);
+    const endpoint = req.params.endpoint;
 
     if (!process.env.DIGIFLAZZ_USERNAME || !process.env.DIGIFLAZZ_API_KEY) {
       return res.status(500).json({ 
@@ -551,29 +551,33 @@ app.post('/payload', limiter, async (req, res) => {
 // Webhook test proxy route
 app.post('/api/test-webhook-proxy', async (req, res) => {
   if (req.method !== 'POST') {
-    return res.status(405).json({ status: 'error', message: 'Method not allowed', data: {} });
+    return res.status(405).json({ message: 'Method not allowed' });
   }
 
   try {
-    const { data: webhookData } = req.body;
-    console.log('🚀 Forwarding webhook test to Digiflazz:', webhookData);
-    
-    const response = await fetch('https://api.digiflazz.com/v1/transaction-status', {
+    console.log('🚀 Forwarding webhook test to Digiflazz');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+
+    // Forward request to Digiflazz
+    const response = await fetch('https://api.digiflazz.com/v1/webhook-test', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(webhookData)
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.DIGIFLAZZ_API_KEY}`
+      },
+      body: JSON.stringify(req.body)
     });
 
-    const result = await response.json();
-    console.log('✅ Webhook test response:', result);
-    
-    res.status(200).json({ status: 'success', message: 'Webhook test forwarded', data: result });
+    const data = await response.json();
+    console.log('Digiflazz webhook test response:', data);
+
+    res.status(response.status).json(data);
   } catch (error) {
     console.error('❌ Error forwarding webhook test:', error);
     res.status(500).json({ status: 'error', message: 'Failed to forward webhook test', data: {} });
+  }
 });
-
-const server = http.createServer(app);
 
 const setupCronJobs = () => {
   // Cron job untuk memeriksa transaksi pending
@@ -713,6 +717,8 @@ const setupCronJobs = () => {
     }
   });
 };
+
+const server = http.createServer(app);
 
 server.listen(port, () => {
   console.log(`🚀 Server berjalan di http://${process.env.HOST || 'localhost'}:${port}`);
