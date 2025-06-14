@@ -390,6 +390,50 @@ export default function PPOBAdminPage() {
     }
   };
 
+  const checkBalance = async () => {
+    setIsLoading(true);
+    try {
+      if (!digiflazzConfig || !digiflazzConfig.username || !digiflazzConfig.api_key) {
+        alert('Please configure Digiflazz credentials first');
+        return;
+      }
+
+      // Generate signature
+      const signValue = `${digiflazzConfig.username}${digiflazzConfig.api_key}cek-saldo`;
+      const signature = CryptoJS.HmacSHA1(signValue, digiflazzConfig.api_key).toString();
+
+      const response = await fetch('/digiflazz-proxy/v1/cek-saldo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: digiflazzConfig.username,
+          sign: signature
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Balance check failed:', errorText);
+        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('Balance check response:', data);
+      if (data.status === 'success' && data.data) {
+        alert(`Saldo: ${data.data.saldo || data.data.balance || 'Tidak tersedia'}`);
+      } else {
+        alert('Gagal memeriksa saldo: ' + (data.message || 'Tidak ada respons dari server'));
+      }
+    } catch (error) {
+      console.error('Error checking balance:', error);
+      alert(`Gagal memeriksa saldo: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleTestPurchase = async () => {
     if (!selectedService) {
       alert('Please select a service first');
@@ -411,15 +455,16 @@ export default function PPOBAdminPage() {
       const apiKey = digiflazzConfig?.api_key || '';
       const refId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const signRaw = `${username}${apiKey}${refId}`;
-      const signature = CryptoJS.MD5(signRaw).toString();
+      const signature = CryptoJS.HmacSHA1(signRaw, apiKey).toString();
       const buyerSkuCode = typeof selectedProduct === 'string' ? selectedProduct : (selectedProduct as any).buyer_sku_code;
+      const price = typeof selectedProduct === 'string' ? 0 : (selectedProduct as any).price || 0;
       const requestBody = {
         username,
         buyer_sku_code: buyerSkuCode || '',
         customer_no: customerNo,
         ref_id: refId,
         sign: signature,
-        price: 0, // Adding default price as required by Digiflazz API
+        price: price
       };
       console.log('Test Purchase Request Body:', requestBody); // Log request body for debugging
       const response = await fetch('/digiflazz-proxy/v1/transaction', {

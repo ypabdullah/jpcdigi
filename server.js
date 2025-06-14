@@ -459,22 +459,50 @@ const cekSaldoHandler = async (req, res) => {
   try {
     console.log('🚀 Proxying balance check request to Digiflazz');
     
-    // Generate signature
-    const signValue = 'cek-saldo';
-    const sign = crypto.createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+    // Validate request body
+    if (!req.body || !req.body.username || !req.body.sign) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Missing required fields: username, sign'
+      });
+    }
+
+    // Generate signature using proper signing string
+    const signValue = `${req.body.username}${process.env.DIGIFLAZZ_API_KEY}cek-saldo`;
+    const expectedSign = crypto.createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
       .digest('hex');
 
+    // Verify signature
+    if (req.body.sign !== expectedSign) {
+      console.error('❌ Invalid signature:', { received: req.body.sign, expected: expectedSign });
+      return res.status(401).json({
+        status: 'error',
+        message: 'Invalid signature'
+      });
+    }
+
+    // Make request to Digiflazz
     const response = await fetch('https://api.digiflazz.com/v1/cek-saldo', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        username: process.env.DIGIFLAZZ_USERNAME,
-        sign: sign
+        username: req.body.username,
+        sign: expectedSign
       })
     });
+
+    // Handle response
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ Digiflazz API returned status:', response.status, errorText);
+      return res.status(response.status).json({
+        status: 'error',
+        message: `Digiflazz API error: ${errorText}`
+      });
+    }
 
     const result = await response.json();
     console.log('✅ Balance check response:', result);
@@ -484,7 +512,7 @@ const cekSaldoHandler = async (req, res) => {
     res.status(500).json({ 
       status: 'error', 
       message: 'Failed to process balance check', 
-      data: result 
+      error: error.message 
     });
   }
 };
