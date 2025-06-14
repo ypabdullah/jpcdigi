@@ -4,6 +4,7 @@ import express from 'express';
 import http from 'http';
 import cron from 'node-cron';
 import crypto from 'crypto';
+import CryptoJS from 'crypto-js';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
@@ -36,10 +37,9 @@ const validateTransactionData = (data) => {
   }
 };
 
+// Generate signature using CryptoJS for consistency with frontend
 const generateSignature = (username, apiKey, value) => {
-  return crypto.createHmac('sha1', apiKey)
-    .update(value)
-    .digest('hex');
+  return CryptoJS.HmacSHA1(value, apiKey).toString();
 };
 
 // Initialize app and configurations
@@ -459,6 +459,15 @@ const cekSaldoHandler = async (req, res) => {
   try {
     console.log('🚀 Proxying balance check request to Digiflazz');
     
+    // Log incoming request details
+    console.log('Incoming balance check request:', {
+      body: req.body,
+      username: req.body.username,
+      receivedSign: req.body.sign,
+      envUsername: process.env.DIGIFLAZZ_USERNAME,
+      envApiKeyLength: process.env.DIGIFLAZZ_API_KEY?.length
+    });
+
     // Validate request body
     if (!req.body || !req.body.username || !req.body.sign) {
       return res.status(400).json({
@@ -467,15 +476,25 @@ const cekSaldoHandler = async (req, res) => {
       });
     }
 
-    // Generate signature using proper signing string
+    // Generate signature using proper signing string with CryptoJS
     const signValue = `${req.body.username}${process.env.DIGIFLAZZ_API_KEY}cek-saldo`;
-    const expectedSign = crypto.createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
-      .update(signValue)
-      .digest('hex');
+    const expectedSign = CryptoJS.HmacSHA1(signValue, process.env.DIGIFLAZZ_API_KEY).toString();
+
+    // Log signature details for debugging
+    console.log('Signature details:', {
+      signValue,
+      expectedSign,
+      receivedSign: req.body.sign,
+      match: req.body.sign === expectedSign
+    });
 
     // Verify signature
     if (req.body.sign !== expectedSign) {
-      console.error('❌ Invalid signature:', { received: req.body.sign, expected: expectedSign });
+      console.error('❌ Invalid signature:', { 
+        received: req.body.sign,
+        expected: expectedSign,
+        signValue
+      });
       return res.status(401).json({
         status: 'error',
         message: 'Invalid signature'
@@ -483,6 +502,7 @@ const cekSaldoHandler = async (req, res) => {
     }
 
     // Make request to Digiflazz
+    console.log('Making request to Digiflazz API...');
     const response = await fetch('https://api.digiflazz.com/v1/cek-saldo', {
       method: 'POST',
       headers: { 
@@ -492,6 +512,13 @@ const cekSaldoHandler = async (req, res) => {
         username: req.body.username,
         sign: expectedSign
       })
+    });
+
+    // Log Digiflazz API response details
+    console.log('Digiflazz API response status:', response.status);
+    console.log('Digiflazz API response headers:', {
+      'content-type': response.headers.get('content-type'),
+      'content-length': response.headers.get('content-length')
     });
 
     // Handle response

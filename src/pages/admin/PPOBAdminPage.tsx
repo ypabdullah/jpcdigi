@@ -104,7 +104,7 @@ export default function PPOBAdminPage() {
             },
             body: JSON.stringify({
               username: digiflazzConfig.username,
-              apiKey: digiflazzConfig.api_key
+              sign: CryptoJS.HmacSHA1(`${digiflazzConfig.username}${digiflazzConfig.api_key}price-list`, digiflazzConfig.api_key).toString()
             }),
           });
           
@@ -401,6 +401,14 @@ export default function PPOBAdminPage() {
       // Generate signature
       const signValue = `${digiflazzConfig.username}${digiflazzConfig.api_key}cek-saldo`;
       const signature = CryptoJS.HmacSHA1(signValue, digiflazzConfig.api_key).toString();
+      
+      // Log the signing values for debugging
+      console.log('Balance check signing values:', {
+        username: digiflazzConfig.username,
+        signValue,
+        signature,
+        requestUrl: '/digiflazz-proxy/v1/cek-saldo'
+      });
 
       const response = await fetch('/digiflazz-proxy/v1/cek-saldo', {
         method: 'POST',
@@ -413,9 +421,21 @@ export default function PPOBAdminPage() {
         }),
       });
 
+      // Log the response status and headers
+      console.log('Balance check response status:', response.status);
+      const headers = {};
+      response.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+      console.log('Balance check response headers:', headers);
+
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('Balance check failed:', errorText);
+        console.error('Balance check failed:', {
+          status: response.status,
+          errorText,
+          responseHeaders: headers
+        });
         throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
       }
 
@@ -427,7 +447,11 @@ export default function PPOBAdminPage() {
         alert('Gagal memeriksa saldo: ' + (data.message || 'Tidak ada respons dari server'));
       }
     } catch (error) {
-      console.error('Error checking balance:', error);
+      console.error('Error checking balance:', {
+        error,
+        message: error.message,
+        stack: error.stack
+      });
       alert(`Gagal memeriksa saldo: ${error.message}`);
     } finally {
       setIsLoading(false);
