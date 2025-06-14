@@ -489,6 +489,89 @@ const cekSaldoHandler = async (req, res) => {
   }
 };
 
+// Transaction history handler
+const transactionHistoryHandler = async (req, res) => {
+  try {
+    console.log('🚀 Proxying transaction history request to Digiflazz');
+    
+    // Get request body
+    const body = req.body;
+    
+    // Validate required fields
+    if (!body.username || !body.sign) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Missing required fields: username, sign'
+      });
+    }
+
+    // Generate expected signature
+    const expectedSign = generateSignature(
+      process.env.DIGIFLAZZ_USERNAME,
+      process.env.DIGIFLAZZ_API_KEY,
+      `${process.env.DIGIFLAZZ_USERNAME}${process.env.DIGIFLAZZ_API_KEY}transaction-history`
+    );
+
+    if (body.sign !== expectedSign) {
+      console.error('❌ Invalid signature:', { received: body.sign, expected: expectedSign });
+      return res.status(401).json({
+        status: 'error',
+        message: 'Invalid signature'
+      });
+    }
+
+    const response = await fetch('https://api.digiflazz.com/v1/transaction-history', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        sign: expectedSign,
+        cmd: 'transaction-history'
+      })
+    });
+
+    const responseText = await response.text();
+    
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('❌ Error parsing response:', parseError);
+      result = { 
+        status: 'error',
+        message: 'Invalid response format from Digiflazz'
+      };
+      return res.status(200).json({ data: result });
+    }
+
+    console.log('✅ Transaction history response:', result);
+    
+    // Handle different response structures
+    if (result.status === 'error') {
+      return res.status(400).json(result);
+    }
+
+    // If response contains data, return it
+    if (result.data) {
+      return res.status(200).json({ data: result.data });
+    }
+
+    // Default response
+    return res.status(200).json({ data: [] });
+  } catch (error) {
+    console.error('❌ Error processing transaction history:', error);
+    return res.status(500).json({ status: 'error', message: error.message });
+  }
+};
+
+// Register the transaction history endpoint
+app.post('/digiflazz-proxy/v1/transaction-history', transactionHistoryHandler);
+
+// Export the handler
+export { transactionHistoryHandler as transactionHistory };
+
 // Register the balance check endpoint
 app.post('/digiflazz-proxy/v1/cek-saldo', cekSaldoHandler);
 

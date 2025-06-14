@@ -203,8 +203,8 @@ export default function PPOBAdminPage() {
       const endpoint = '/digiflazz-proxy/v1/transaction-history';
       
       // Generate proper signature using username and api_key
-      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}history`;
-      const sign = CryptoJS.MD5(signRaw).toString();
+      const signValue = `${digiflazzConfig.username}${digiflazzConfig.api_key}transaction-history`;
+      const sign = CryptoJS.HmacSHA1(signValue, digiflazzConfig.api_key).toString();
       
       const response = await fetch(`${baseUrl}${endpoint}`, {
         method: 'POST',
@@ -213,7 +213,8 @@ export default function PPOBAdminPage() {
         },
         body: JSON.stringify({
           username: digiflazzConfig.username,
-          sign: sign
+          sign: sign,
+          cmd: 'transaction-history'
         }),
       });
       
@@ -418,6 +419,7 @@ export default function PPOBAdminPage() {
         customer_no: customerNo,
         ref_id: refId,
         sign: signature,
+        price: 0, // Adding default price as required by Digiflazz API
       };
       console.log('Test Purchase Request Body:', requestBody); // Log request body for debugging
       const response = await fetch('/digiflazz-proxy/v1/transaction', {
