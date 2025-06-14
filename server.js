@@ -3,11 +3,13 @@ import { dirname, join } from 'path';
 import express from 'express';
 import bodyParser from 'body-parser';
 import http from 'http';
+import cron from 'node-cron';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import fetch from 'node-fetch';
 import cron from 'node-cron';
+import rateLimit from 'express-rate-limit';
 
 // Transaction status constants
 const TRANSACTION_STATUS = {
@@ -18,7 +20,6 @@ const TRANSACTION_STATUS = {
 };
 
 // Rate limiting middleware
-import rateLimit from 'express-rate-limit';
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100 // limit each IP to 100 requests per windowMs
@@ -153,12 +154,17 @@ function pollDigiflazzStatus(refId, buyerTxId) {
   }, 3600000); // Timeout after 1 hour
 }
 
-app.use(express.static(join(__dirname, 'dist')));
+app.use(express.static(join(__dirname, 'public')));
+
+// Serve static files from dist directory
+app.use('/dist', express.static(join(__dirname, 'dist')));
 
 // Digiflazz proxy endpoints
 app.post('/digiflazz-proxy/v1/:endpoint', limiter, async (req, res) => {
   try {
     console.log('🚀 Proxying request to Digiflazz');
+    console.log('Endpoint:', req.params.endpoint);
+    console.log('Body:', req.body);
     
     // Get request body
     const body = req.body || {};
@@ -171,99 +177,137 @@ app.post('/digiflazz-proxy/v1/:endpoint', limiter, async (req, res) => {
       });
     }
 
-    // Generate signature based on path and request
-    const signValue = path === '/v1/transaction-history' ? 'history' : body.ref_id || body.command || '';
-    const sign = generateSignature(process.env.DIGIFLAZZ_USERNAME, process.env.DIGIFLAZZ_API_KEY, signValue);
-
-    const apiRequestBody = {
-      username: process.env.DIGIFLAZZ_USERNAME,
-      buyer_sku_code: body.buyer_sku_code,
-      customer_no: body.customer_no,
-      ref_id: body.ref_id,
-      sign: sign
-    };
-
-    console.log('Payload dikirim ke Digiflazz:', JSON.stringify(apiRequestBody, null, 2));
-
-    const response = await fetch(`${DIGIFLAZZ_BASE_URL}${path}`, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(apiRequestBody)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Digiflazz API Error:', response.status, errorText);
-      throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+    // Generate signature based on endpoint
+    let signValue = '';
+    switch(endpoint) {
+      case 'price-list':
+        signValue = 'price-list';
+        break;
+      case 'transaction-history':
+        signValue = 'history';
+        break;
+      case 'cek-saldo':
+        signValue = 'cek-saldo';
+        break;
+      default:
+        signValue = body.command || endpoint;
     }
 
-    const data = await response.json();
-
-    // Special handling for PLN inquiry
-    if (path.includes('/v1/inquiry-pln')) {
-      return res.status(200).json({
-        data: {
-          status: data.data?.status || 'Gagal',
-          message: data.data?.message || 'No message',
-          customer_no: data.data?.customer_no || body.customer_no,
-          meter_no: data.data?.meter_no || 'N/A',
-          subscriber_id: data.data?.subscriber_id || 'N/A',
-          name: data.data?.name || 'N/A',
-          segment_power: data.data?.segment_power || 'N/A',
-          rc: data.data?.rc || 'N/A'
-        }
-      });
-    }
-
-    console.log('✅ Digiflazz response:', data);
-    res.status(200).json(data);
-
-  } catch (error) {
-    console.error('❌ Error:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'Internal Server Error', 
-      error: error.message 
-    });
-  }
-});
-
-app.post('/digiflazz-proxy/v1/transaction', async (req, res) => {
-  try {
-    console.log('🚀 Proxying transaction request to Digiflazz');
-    
-    // Get request body
-    const body = req.body;
-    
-    // Generate signature
-    const signValue = body.command || 'transaction';
+    // Generate HMAC SHA1 signature
     const sign = crypto
       .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
       .digest('hex');
 
-    const response = await fetch('https://api.digiflazz.com/v1/transaction', {
+    const apiRequestBody = {
+      username: process.env.DIGIFLAZZ_USERNAME,
+      sign: sign
+    };
+
+    // Add specific fields based on endpoint
+    if (endpoint === 'transaction') {
+      apiRequestBody.ref_id = body.ref_id;
+      apiRequestBody.customer_no = body.customer_no;
+      apiRequestBody.buyer_sku_code = body.buyer_sku_code;
+      apiRequestBody.price = body.price;
+    }
+
+    console.log('Sending request to Digiflazz:', {
+      endpoint: endpoint,
+      signValue: signValue,
+      body: apiRequestBody
+    });
+
+    // Send request to Digiflazz API
+    const response = await fetch(`https://api.digiflazz.com/v1/${endpoint}`, {
       method: 'POST',
-      headers: { 
+      headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        username: process.env.DIGIFLAZZ_USERNAME,
-        command: body.command,
-        customer_no: body.customer_no,
-        buyer_sku_code: body.buyer_sku_code,
-        sign: sign
-      })
+      body: JSON.stringify(apiRequestBody)
     });
 
     const result = await response.json();
-    console.log('✅ Transaction response:', result);
-    res.status(200).json(result);
+    console.log('Digiflazz response:', result);
+
+    res.status(response.status).json(result);
   } catch (error) {
-    console.error('❌ Error proxying transaction:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to process transaction', data: {} });
+    console.error('❌ Error proxying request:', error);
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to proxy request to Digiflazz',
+      error: error.message 
+    });
+  }
+});
+
+// Webhook handler
+app.post('/payload', limiter, async (req, res) => {
+  try {
+    console.log('📩 Webhook received:', new Date().toISOString());
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+
+    // Validate signature
+    const signature = req.headers['x-digiflazz-signature'];
+    if (!signature) {
+      return res.status(400).json({ status: 'error', message: 'Missing signature' });
+    }
+
+    // Process webhook data
+    const eventType = req.body.event || 'unknown';
+    if (eventType === 'create') {
+      // Insert or update transaction in Supabase
+      const { error } = await supabase
+        .from('transaksi_digiflazz')
+        .upsert([
+          {
+            ref_id: req.body.ref_id,
+            customer_no: req.body.customer_no,
+            buyer_sku_code: req.body.buyer_sku_code,
+            status: req.body.status,
+            message: req.body.message,
+            rc: req.body.rc,
+            sn: req.body.sn,
+            price: req.body.price,
+            buyer_last_saldo: req.body.buyer_last_saldo,
+            tele: req.body.tele,
+            wa: req.body.wa,
+            updated_at: new Date().toISOString()
+          }
+        ]);
+
+      if (error) {
+        console.error('❌ Error saving webhook data:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to save webhook data' });
+      }
+
+      console.log('✅ Webhook data saved successfully');
+    } else if (eventType === 'update') {
+      // Update transaction status in Supabase
+      const { error } = await supabase
+        .from('transaksi_digiflazz')
+        .update({
+          status: req.body.status,
+          message: req.body.message,
+          rc: req.body.rc,
+          sn: req.body.sn,
+          updated_at: new Date().toISOString()
+        })
+        .eq('ref_id', req.body.ref_id);
+
+      if (error) {
+        console.error('❌ Error updating webhook data:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to update webhook data' });
+      }
+
+      console.log('✅ Webhook data updated successfully');
+    }
+
+    res.status(200).json({ status: 'success', message: 'Webhook processed successfully' });
+  } catch (error) {
+    console.error('❌ Error processing webhook:', error);
+    res.status(500).json({ status: 'error', message: 'Internal server error', data: {} });
   }
 });
 
@@ -282,7 +326,7 @@ app.post('/digiflazz-proxy/v1/inquiry-pln', async (req, res) => {
     }
 
     // Generate signature
-    const signValue = body.command || 'inquiry';
+    const signValue = 'inquiry';
     const sign = crypto
       .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
@@ -295,7 +339,7 @@ app.post('/digiflazz-proxy/v1/inquiry-pln', async (req, res) => {
       },
       body: JSON.stringify({
         username: process.env.DIGIFLAZZ_USERNAME,
-        command: body.command,
+        command: 'inquiry-pln',
         customer_no: body.customer_no,
         sign: sign
       })
@@ -310,59 +354,16 @@ app.post('/digiflazz-proxy/v1/inquiry-pln', async (req, res) => {
   }
 });
 
-app.post('/digiflazz-proxy/v1/price-list', async (req, res) => {
-  try {
-    console.log('🚀 Proxying price-list request to Digiflazz');
-    
-    // Get request body
-    const body = req.body;
-    
-    // Generate signature based on request body
-    const signValue = body.command || 'price-list';
-    const sign = crypto
-      .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
-      .update(signValue)
-      .digest('hex');
-
-    const response = await fetch('https://api.digiflazz.com/v1/price-list', {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        username: process.env.DIGIFLAZZ_USERNAME,
-        command: body.command,
-        sign: sign
-      })
-    });
-
-    const result = await response.json();
-    console.log('✅ Price-list response:', result);
-    res.status(200).json(result);
-  } catch (error) {
-    console.error('❌ Error proxying price-list:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to fetch price list', data: {} });
-  }
-});
-
 app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
   try {
-    console.log('🚀 Proxying transaction-history request to Digiflazz');
-    console.log('Request body:', req.body);
+    console.log('🚀 Proxying transaction history request to Digiflazz');
     
-    // Get request body
-    const body = req.body;
-    
-    // Generate signature based on request body
-    const signValue = body.command || 'history';
-    console.log('Using sign value:', signValue);
-    
+    // Generate signature
+    const signValue = 'transaction-history';
     const sign = crypto
       .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
       .digest('hex');
-
-    console.log('Generated sign:', sign);
 
     const response = await fetch('https://api.digiflazz.com/v1/transaction-history', {
       method: 'POST',
@@ -371,189 +372,122 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
       },
       body: JSON.stringify({
         username: process.env.DIGIFLAZZ_USERNAME,
-        command: body.command,
         sign: sign
       })
     });
 
     const result = await response.json();
-    console.log('✅ Transaction-history response:', result);
-    
-    // Check if response contains error
-    if (result.status && result.status !== 'success') {
-      console.error('❌ Digiflazz returned error:', result);
-      return res.status(500).json({ 
-        status: 'error', 
-        message: result.message || 'Failed to fetch transaction history', 
-        data: result.data || {} 
-      });
-    }
-
+    console.log('✅ Transaction history response:', result);
     res.status(200).json(result);
   } catch (error) {
-    console.error('❌ Error proxying transaction-history:', error);
-    
-    // Try to get more details about the error
-    if (error.response && error.response.data) {
-      console.error('Error response:', error.response.data);
-    }
-    
-    res.status(500).json({ 
-      status: 'error', 
-      message: error.message || 'Failed to fetch transaction history', 
-      data: error.response?.data || {} 
-    });
+    console.error('❌ Error proxying transaction history:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to fetch transaction history', data: {} });
   }
 });
 
+app.post('/digiflazz-proxy/v1/cek-saldo', async (req, res) => {
+  try {
+    console.log('🚀 Proxying balance check request to Digiflazz');
+    
+    // Generate signature
+    const signValue = 'cek-saldo';
+    const sign = crypto
+      .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(signValue)
+      .digest('hex');
+
+    const response = await fetch('https://api.digiflazz.com/v1/cek-saldo', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        sign: sign
+      })
+    });
+
+    const result = await response.json();
+    console.log('✅ Balance check response:', result);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error('❌ Error proxying balance check:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to check balance', data: {} });
+  }
+});
+
+// Webhook handler
 app.post('/payload', limiter, async (req, res) => {
   try {
-    console.log('📩 Webhook diterima:', new Date().toISOString());
+    console.log('📩 Webhook received:', new Date().toISOString());
     console.log('Headers:', JSON.stringify(req.headers, null, 2));
     console.log('Body:', JSON.stringify(req.body, null, 2));
-
-    const eventType = req.body.event || 'unknown';
-    console.log('Event Type:', eventType);
 
     // Validate signature
     const signature = req.headers['x-digiflazz-signature'];
     if (!signature) {
-      console.error('❌ Tidak ada signature di header');
-      return res.status(401).json({ status: 'error', message: 'No signature provided', data: {} });
+      return res.status(400).json({ status: 'error', message: 'Missing signature' });
     }
 
-    const computedSignature = crypto
-      .createHmac('sha1', secret)
-      .update(JSON.stringify(req.body))
-      .digest('hex');
-
-    if (computedSignature !== signature) {
-      console.error('❌ Signature tidak valid:', computedSignature, '!=', signature);
-      return res.status(401).json({ status: 'error', message: 'Invalid signature', data: {} });
-    }
-
-    console.log('✅ Signature valid');
-
-    if (!req.body.data) {
-      console.error('❌ No data in payload');
-      return res.status(400).json({ status: 'error', message: 'No data in payload', data: {} });
-    }
-
-    const data = req.body.data;
-    const transactionId = data.ref_id;
-
-    if (!transactionId) {
-      console.error('❌ Missing transaction identifier');
-      return res.status(400).json({ status: 'error', message: 'Missing transaction identifier', data: {} });
-    }
-
-    // Handle create event
+    // Process webhook data
+    const eventType = req.body.event || 'unknown';
     if (eventType === 'create') {
-      console.log('📥 Create event received from Digiflazz');
-      
-      // Check if transaction already exists
-      const { data: existingTx, error: checkError } = await supabase
+      // Insert or update transaction in Supabase
+      const { error } = await supabase
         .from('transaksi_digiflazz')
-        .select('*')
-        .eq('ref_id', data.ref_id)
-        .single();
-
-      if (checkError) {
-        console.error('❌ Error checking existing transaction:', checkError.message);
-        return res.status(500).json({ status: 'error', message: 'Database error', data: {} });
-      }
-
-      if (existingTx) {
-        console.log('🔄 Transaction already exists, updating status');
-        // Update existing transaction
-        const { error: updateError } = await supabase
-          .from('transaksi_digiflazz')
-          .update({
-            status: data.status,
-            message: data.message,
-            rc: data.rc,
-            sn: data.sn || '',
+        .upsert([
+          {
+            ref_id: req.body.ref_id,
+            customer_no: req.body.customer_no,
+            buyer_sku_code: req.body.buyer_sku_code,
+            status: req.body.status,
+            message: req.body.message,
+            rc: req.body.rc,
+            sn: req.body.sn,
+            price: req.body.price,
+            buyer_last_saldo: req.body.buyer_last_saldo,
+            tele: req.body.tele,
+            wa: req.body.wa,
             updated_at: new Date().toISOString()
-          })
-          .eq('ref_id', data.ref_id);
+          }
+        ]);
 
-        if (updateError) {
-          console.error('❌ Error updating transaction:', updateError.message);
-          return res.status(500).json({ status: 'error', message: 'Failed to update transaction', data: {} });
-        }
-
-        console.log('✅ Transaction updated successfully');
-        return res.status(200).json({ status: 'success', message: 'Transaction updated', data: {} });
+      if (error) {
+        console.error('❌ Error saving webhook data:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to save webhook data' });
       }
 
-      // Insert new transaction
-      const { error: insertError } = await supabase.from('transaksi_digiflazz').insert([
-        {
-          ref_id: data.ref_id,
-          customer_no: data.customer_no,
-          buyer_sku_code: data.buyer_sku_code,
-          status: data.status,
-          message: data.message,
-          rc: data.rc,
-          sn: data.sn || '',
-          price: data.price,
-          buyer_last_saldo: data.buyer_last_saldo,
-          tele: data.tele,
-          wa: data.wa,
-          transaction_date: new Date().toISOString()
-        }
-      ]);
-
-      if (insertError) {
-        console.error('❌ Error saving to Supabase:', insertError.message);
-        return res.status(500).json({ status: 'error', message: 'Failed to save transaction', data: {} });
-      }
-
-      console.log('✅ Transaction created in Supabase');
-      return res.status(200).json({ status: 'success', message: 'Transaction created', data: {} });
-    }
-
-    // Handle update event
-    if (eventType === 'update') {
-      console.log('🔁 Webhook update diterima');
-      
-      // Update existing transaction
-      const { error: updateError } = await supabase
+      console.log('✅ Webhook data saved successfully');
+    } else if (eventType === 'update') {
+      // Update transaction status in Supabase
+      const { error } = await supabase
         .from('transaksi_digiflazz')
         .update({
-          status: data.status,
-          message: data.message,
-          rc: data.rc,
-          sn: data.sn || '',
+          status: req.body.status,
+          message: req.body.message,
+          rc: req.body.rc,
+          sn: req.body.sn,
           updated_at: new Date().toISOString()
         })
-        .eq('ref_id', data.ref_id);
+        .eq('ref_id', req.body.ref_id);
 
-      if (updateError) {
-        console.error('❌ Error updating transaction:', updateError.message);
-        return res.status(500).json({ status: 'error', message: 'Failed to update transaction', data: {} });
+      if (error) {
+        console.error('❌ Error updating webhook data:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to update webhook data' });
       }
 
-      console.log('✅ Transaction updated successfully');
-      return res.status(200).json({ status: 'success', message: 'Transaction updated', data: {} });
+      console.log('✅ Webhook data updated successfully');
     }
 
-    // Handle unknown event type
-    console.warn('⚠️ Unknown event type:', eventType);
-    return res.status(200).json({ status: 'warning', message: 'Unknown event type', data: {} });
-
+    res.status(200).json({ status: 'success', message: 'Webhook processed successfully' });
   } catch (error) {
     console.error('❌ Error processing webhook:', error);
-    return res.status(500).json({ status: 'error', message: 'Internal server error', data: {} });
+    res.status(500).json({ status: 'error', message: 'Internal server error', data: {} });
   }
 });
 
 // Webhook test proxy route
 app.post('/api/test-webhook-proxy', async (req, res) => {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ message: 'Method not allowed' });
-  }
-
   try {
     console.log('🚀 Forwarding webhook test to Digiflazz');
     console.log('Headers:', JSON.stringify(req.headers, null, 2));
@@ -578,14 +512,32 @@ app.post('/api/test-webhook-proxy', async (req, res) => {
     res.status(500).json({ status: 'error', message: 'Failed to forward webhook test', data: {} });
   }
 });
+    const response = await fetch('https://api.digiflazz.com/v1/webhook-test', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.DIGIFLAZZ_API_KEY}`
+      },
+      body: JSON.stringify(req.body)
+    });
+
+    const data = await response.json();
+    console.log('Digiflazz webhook test response:', data);
+
+    res.status(response.status).json(data);
+  } catch (error) {
+    console.error('❌ Error forwarding webhook test:', error);
+    res.status(500).json({ status: 'error', message: 'Failed to forward webhook test', data: {} });
+  }
+});
 
 const setupCronJobs = () => {
   // Cron job untuk memeriksa transaksi pending
   cron.schedule('*/10 * * * *', async () => {
-    console.log('⏱️ Menjalankan cron job untuk memeriksa transaksi pending');
+    console.log('⏱️ Running cron job to check pending transactions');
     
     try {
-      // Ambil semua transaksi pending
+      // Get all pending transactions
       const { data: pending, error: fetchError } = await supabase
         .from('transaksi_digiflazz')
         .select('*')
@@ -597,38 +549,38 @@ const setupCronJobs = () => {
       }
 
       if (!pending || pending.length === 0) {
-        console.log('✅ Tidak ada transaksi pending yang perlu diperiksa');
+        console.log('✅ No pending transactions to check');
         return;
       }
 
-      console.log(`🔄 Memeriksa ${pending.length} transaksi pending`);
+      console.log(`🔄 Checking ${pending.length} pending transactions`);
 
-      // Periksa setiap transaksi pending
+      // Check each pending transaction
       for (const tx of pending) {
         try {
           await pollDigiflazzStatus(tx.ref_id);
         } catch (error) {
-          console.error(`❌ Error memeriksa transaksi ${tx.ref_id}:`, error);
+          console.error(`❌ Error checking transaction ${tx.ref_id}:`, error);
         }
       }
 
     } catch (error) {
-      console.error('❌ Error dalam cron job:', error);
+      console.error('❌ Error in cron job:', error);
     }
   });
 
   // Cron job untuk membersihkan transaksi timeout
   cron.schedule('0 * * * *', async () => {
-    console.log('⏱️ Menjalankan cron job untuk membersihkan transaksi timeout');
+    console.log('⏱️ Running cron job to clean up timeout transactions');
     
     try {
-      // Ambil semua transaksi yang sudah melewati batas waktu (1 jam)
+      // Get all transactions that have exceeded the 1 hour limit
       const { data: timeoutTx, error: fetchError } = await supabase
         .from('transaksi_digiflazz')
         .select('*')
         .eq('status', TRANSACTION_STATUS.PENDING)
-        .lt('created_at', new Date(Date.now() - 3600000)) // 1 jam yang lalu
-        .timeout(10000); // Timeout 10 detik
+        .lt('created_at', new Date(Date.now() - 3600000)) // 1 hour ago
+        .timeout(10000); // 10 second timeout
 
       if (fetchError) {
         console.error('❌ Error fetching timeout transactions:', fetchError);
@@ -636,20 +588,20 @@ const setupCronJobs = () => {
       }
 
       if (!timeoutTx || timeoutTx.length === 0) {
-        console.log('✅ Tidak ada transaksi timeout yang perlu ditangani');
+        console.log('✅ No timeout transactions to handle');
         return;
       }
 
-      console.log(`⏰ Menemukan ${timeoutTx.length} transaksi timeout`);
+      console.log(`⏰ Found ${timeoutTx.length} timeout transactions`);
 
-      // Update status menjadi timeout
+      // Update status to timeout
       for (const tx of timeoutTx) {
         try {
           const { error: updateError } = await supabase
             .from('transaksi_digiflazz')
             .update({
               status: TRANSACTION_STATUS.TIMEOUT,
-              message: 'Transaksi timeout (melebihi 1 jam)'
+              message: 'Transaction timeout (exceeded 1 hour)'
             })
             .eq('ref_id', tx.ref_id);
 
@@ -662,13 +614,13 @@ const setupCronJobs = () => {
       }
 
     } catch (error) {
-      console.error('❌ Error dalam cron job timeout:', error);
+      console.error('❌ Error in timeout cron job:', error);
     }
   });
 
-  // Cron job untuk memperbarui harga produk (setiap hari pukul 03:00)
+  // Cron job untuk memperbarui harga produk (daily at 3:00 AM)
   cron.schedule('0 3 * * *', async () => {
-    console.log('⏱️ Menjalankan cron job untuk memperbarui harga produk');
+    console.log('⏱️ Running cron job to update product prices');
     
     try {
       // Generate signature
@@ -678,7 +630,7 @@ const setupCronJobs = () => {
         .update(signValue)
         .digest('hex');
 
-      const response = await fetch('https://api.digiflazz.com/v1/price-list', {
+      const response = await fetch(`${DIGIFLAZZ_BASE_URL}/v1/price-list`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json'
@@ -692,7 +644,7 @@ const setupCronJobs = () => {
       const result = await response.json();
       
       if (result.status === 'success' && result.data) {
-        // Update atau insert harga di Supabase
+        // Update or insert prices in Supabase
         const { error: updateError } = await supabase
           .from('ppob_products')
           .upsert(result.data.map(item => ({
@@ -706,21 +658,23 @@ const setupCronJobs = () => {
         if (updateError) {
           console.error('❌ Error updating product prices:', updateError);
         } else {
-          console.log('✅ Harga produk berhasil diperbarui');
+          console.log('✅ Product prices successfully updated');
         }
       } else {
         console.error('❌ Failed to fetch price list:', result.message || 'Unknown error');
       }
 
     } catch (error) {
-      console.error('❌ Error dalam cron job price list:', error);
+      console.error('❌ Error in price list cron job:', error);
     }
   });
-};
+});
 
 const server = http.createServer(app);
 
 server.listen(port, () => {
-  console.log(`🚀 Server berjalan di http://${process.env.HOST || '202.10.44.157'}:${port}`);
+  console.log(`🚀 Server running at http://${process.env.HOST || '202.10.44.157'}:${port}`);
   setupCronJobs();
 });
+
+module.exports = server;
