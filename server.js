@@ -45,6 +45,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config();
 
 const app = express();
+
+// Serve static files from the dist directory
+app.use(express.static('dist'));
+
+// Serve the main application page
+app.get('*', (req, res) => {
+  res.sendFile(join(__dirname, 'dist', 'index.html'));
+});
+
 const port = process.env.PORT || 5173;
 const secret = process.env.SECRET_WEBHOOK;
 const supabaseUrl = process.env.SUPABASE_URL || '';
@@ -83,16 +92,29 @@ function pollDigiflazzStatus(refId, buyerTxId) {
 
       const response = await fetch(`https://api.digiflazz.com/v1/transaction-status`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify({ 
           username: process.env.DIGIFLAZZ_USERNAME,
           sign: sign,
-          ref_id: refId || buyerTxId 
+          ref_id: refId || buyerTxId,
+          cmd: 'status' // Adding cmd parameter as per Digiflazz API requirements
         })
       });
+
+      // Check response status before parsing
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`❌ Digiflazz API returned status ${response.status}: ${errorText}`);
+        throw new Error(`API Error: ${response.status} - ${errorText}`);
+      }
+
       const result = await response.json();
-      
-      if (result.data && (result.data.status === 'berhasil' || result.data.status === 'gagal')) {
+      console.log('Digiflazz API response:', JSON.stringify(result, null, 2));
+
+      if (result.status === 'success' && result.data && (result.data.status === 'berhasil' || result.data.status === 'gagal')) {
         console.log(`✅ Status updated to ${result.data.status} for ref_id: ${refId}`);
         const data = result.data;
         const { error } = await supabase.from('transaksi_digiflazz').insert([
@@ -116,23 +138,6 @@ function pollDigiflazzStatus(refId, buyerTxId) {
           console.error('❌ Error saving to Supabase after polling:', error.message);
         } else {
           console.log('✅ Transaction saved to Supabase after polling');
-    
-    // Generate UUID for ref_id if not provided
-    if (!body.ref_id) {
-      const { data: { generate_uuid }, error } = await supabase
-        .rpc('generate_uuid')
-        .single();
-      
-      if (error) {
-        console.error('❌ Error generating UUID:', error);
-        return res.status(500).json({ 
-          status: 'error', 
-          message: 'Failed to generate unique transaction ID' 
-        });
-      }
-      
-      body.ref_id = generate_uuid;
-    }
         }
         clearInterval(interval);
         pendingTransactions.delete(refId || buyerTxId);
