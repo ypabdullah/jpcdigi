@@ -104,7 +104,7 @@ export default function PPOBAdminPage() {
             },
             body: JSON.stringify({
               username: digiflazzConfig.username,
-              sign: CryptoJS.HmacSHA1(`${digiflazzConfig.username}${digiflazzConfig.api_key}price-list`, digiflazzConfig.api_key).toString()
+              apiKey: digiflazzConfig.api_key
             }),
           });
           
@@ -199,22 +199,18 @@ export default function PPOBAdminPage() {
   const fetchDigiflazzTransactions = async () => {
     setIsLoading(true);
     try {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://202.10.44.157:5173';
-      const endpoint = '/digiflazz-proxy/v1/transaction-history';
+      const functionUrl = '/digiflazz-proxy/v1/transaction-history';
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}history`;
+      const sign = CryptoJS.MD5(signRaw).toString();
       
-      // Generate proper signature using username and api_key
-      const signValue = `${digiflazzConfig.username}${digiflazzConfig.api_key}transaction-history`;
-      const sign = CryptoJS.HmacSHA1(signValue, digiflazzConfig.api_key).toString();
-      
-      const response = await fetch(`${baseUrl}${endpoint}`, {
+      const response = await fetch(functionUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           username: digiflazzConfig.username,
-          sign: sign,
-          cmd: 'transaction-history'
+          sign: sign
         }),
       });
       
@@ -228,13 +224,12 @@ export default function PPOBAdminPage() {
       } else {
         const data = await response.json();
         console.log('Digiflazz Transaction History Response:', data); // Log response for debugging
-        
-        // Handle different response structures
-        const transactions = data.data || 
-          (data.message && data.rc ? [data] : []) ||
-          [];
-        
-        setDigiflazzTransactions(transactions);
+        if (data && Array.isArray(data.data)) {
+          setDigiflazzTransactions(data.data);
+        } else {
+          console.error('Unexpected transaction data structure from Digiflazz API', data);
+          setDigiflazzTransactions([]);
+        }
       }
     } catch (error) {
       console.error('Error fetching Digiflazz transactions:', error);
@@ -390,74 +385,6 @@ export default function PPOBAdminPage() {
     }
   };
 
-  const checkBalance = async () => {
-    setIsLoading(true);
-    try {
-      if (!digiflazzConfig || !digiflazzConfig.username || !digiflazzConfig.api_key) {
-        alert('Please configure Digiflazz credentials first');
-        return;
-      }
-
-      // Generate signature
-      const signValue = `${digiflazzConfig.username}${digiflazzConfig.api_key}cek-saldo`;
-      const signature = CryptoJS.HmacSHA1(signValue, digiflazzConfig.api_key).toString();
-      
-      // Log the signing values for debugging
-      console.log('Balance check signing values:', {
-        username: digiflazzConfig.username,
-        signValue,
-        signature,
-        requestUrl: '/digiflazz-proxy/v1/cek-saldo'
-      });
-
-      const response = await fetch('/digiflazz-proxy/v1/cek-saldo', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          username: digiflazzConfig.username,
-          sign: signature
-        }),
-      });
-
-      // Log the response status and headers
-      console.log('Balance check response status:', response.status);
-      const headers = {};
-      response.headers.forEach((value, key) => {
-        headers[key] = value;
-      });
-      console.log('Balance check response headers:', headers);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Balance check failed:', {
-          status: response.status,
-          errorText,
-          responseHeaders: headers
-        });
-        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
-      }
-
-      const data = await response.json();
-      console.log('Balance check response:', data);
-      if (data.status === 'success' && data.data) {
-        alert(`Saldo: ${data.data.saldo || data.data.balance || 'Tidak tersedia'}`);
-      } else {
-        alert('Gagal memeriksa saldo: ' + (data.message || 'Tidak ada respons dari server'));
-      }
-    } catch (error) {
-      console.error('Error checking balance:', {
-        error,
-        message: error.message,
-        stack: error.stack
-      });
-      alert(`Gagal memeriksa saldo: ${error.message}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleTestPurchase = async () => {
     if (!selectedService) {
       alert('Please select a service first');
@@ -479,16 +406,14 @@ export default function PPOBAdminPage() {
       const apiKey = digiflazzConfig?.api_key || '';
       const refId = `${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const signRaw = `${username}${apiKey}${refId}`;
-      const signature = CryptoJS.HmacSHA1(signRaw, apiKey).toString();
+      const signature = CryptoJS.MD5(signRaw).toString();
       const buyerSkuCode = typeof selectedProduct === 'string' ? selectedProduct : (selectedProduct as any).buyer_sku_code;
-      const price = typeof selectedProduct === 'string' ? 0 : (selectedProduct as any).price || 0;
       const requestBody = {
         username,
         buyer_sku_code: buyerSkuCode || '',
         customer_no: customerNo,
         ref_id: refId,
         sign: signature,
-        price: price
       };
       console.log('Test Purchase Request Body:', requestBody); // Log request body for debugging
       const response = await fetch('/digiflazz-proxy/v1/transaction', {
@@ -832,7 +757,7 @@ export default function PPOBAdminPage() {
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
                   {supabaseTransactions.map((transaction) => (
-                    <tr key={transaction.id || `transaction-${transaction.ref_id}`}>
+                    <tr key={transaction.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{transaction.ref_id || '-'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.customer_no || '-'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{transaction.buyer_sku_code || '-'}</td>
