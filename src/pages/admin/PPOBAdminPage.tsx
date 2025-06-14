@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import cron from 'node-cron';
 import { Helmet } from "react-helmet";
 import { 
   Card, 
@@ -31,6 +32,186 @@ import { RealtimeChannel } from "@supabase/supabase-js";
 import { dataTagSymbol } from "@tanstack/react-query";
 
 export default function PPOBAdminPage() {
+  // Cron job instance
+  let cronJob: cron.ScheduledTask | null = null;
+
+  // Function to check pending transactions
+  const checkPendingTransactions = async () => {
+    try {
+      console.log(`
+      ==============================================================
+      🔄 Cron Job Started at ${new Date().toISOString()}
+      ==============================================================
+      `);
+      
+      // Get pending transactions from Supabase
+      const { data: pendingTx, error: fetchError } = await supabase
+        .from('transaksi_digiflazz')
+        .select('*')
+        .in('status', ['Pending', 'pending'])
+        .order('updated_at', { ascending: false });
+
+      if (fetchError) {
+        console.error(`❌ Error fetching pending transactions: ${fetchError.message}`);
+        console.error('❌ Detailed error:', fetchError.details);
+        toast.error('Error fetching pending transactions');
+        return;
+      }
+
+      if (!pendingTx || pendingTx.length === 0) {
+        console.log(`✅ No pending transactions found`);
+        console.log(`=============================================================
+        🔄 Cron Job Completed at ${new Date().toISOString()}
+        ==============================================================
+        `);
+        return;
+      }
+
+      console.log(`🔍 Found ${pendingTx.length} pending transactions to check`);
+      console.log('🔍 List of pending transactions:');
+      pendingTx.forEach(tx => {
+        console.log(`  - ref_id: ${tx.ref_id}
+    - customer_no: ${tx.customer_no}
+    - buyer_sku_code: ${tx.buyer_sku_code}
+    - current status: ${tx.status}
+    - last updated: ${tx.updated_at}`);
+      });
+      
+      // Process each pending transaction
+      for (const tx of pendingTx) {
+        try {
+          console.log(`\n----------------------------------------
+          🔄 Checking transaction ${tx.ref_id}...
+          ----------------------------------------`);
+          console.log('🔍 Transaction details:', {
+            ref_id: tx.ref_id,
+            customer_no: tx.customer_no,
+            buyer_sku_code: tx.buyer_sku_code,
+            current_status: tx.status
+          });
+          
+          // Generate signature
+          const sign = CryptoJS.MD5(
+            `${digiflazzConfig?.username}${digiflazzConfig?.api_key}${tx.ref_id}`
+          ).toString();
+          console.log('🔒 Generated signature:', sign);
+
+          // Check transaction status with Digiflazz
+          console.log('🚀 Sending request to Digiflazz API...');
+          const response = await fetch('/digiflazz-proxy/v1/transaction', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              username: digiflazzConfig?.username || '',
+              ref_id: tx.ref_id,
+              sign
+            })
+          });
+
+          console.log('📊 Response status:', response.status);
+          const result = await response.json();
+          console.log('📊 API Response:', JSON.stringify(result, null, 2));
+          
+          if (result.data && result.data.status) {
+            const newStatus = result.data.status;
+            console.log(`✅ Status updated to ${newStatus} for ref_id: ${tx.ref_id}`);
+            console.log('✅ Status change details:', {
+              ref_id: tx.ref_id,
+              old_status: tx.status,
+              new_status: newStatus,
+              message: result.data.message,
+              rc: result.data.rc,
+              sn: result.data.sn
+            });
+            
+            // Update transaction in Supabase
+            console.log('💾 Updating transaction in Supabase...');
+            const updateResult = await supabase
+              .from('transaksi_digiflazz')
+              .update({
+                status: newStatus,
+                message: result.data.message,
+                rc: result.data.rc,
+                sn: result.data.sn,
+                buyer_last_saldo: result.data.buyer_last_saldo,
+                tele: result.data.tele,
+                wa: result.data.wa,
+                updated_at: new Date().toISOString()
+              })
+              .eq('ref_id', tx.ref_id);
+
+            if (updateResult.error) {
+              console.error(`❌ Error updating transaction ${tx.ref_id}: ${updateResult.error.message}`);
+              console.error('❌ Detailed error:', updateResult.error.details);
+              toast.error(`Error updating transaction ${tx.ref_id}`);
+              continue;
+            }
+            console.log('✅ Transaction updated in Supabase');
+
+            // Update local state
+            console.log('🔄 Updating local state...');
+            setTransactions(prev => 
+              prev.map(t => 
+                t.ref_id === tx.ref_id 
+                  ? { ...t, ...result.data, updated_at: new Date().toISOString() } 
+                  : t
+              )
+            );
+
+            // Show success toast for completed transactions
+            if (newStatus === 'Berhasil') {
+              console.log('🎉 Transaction completed successfully!');
+              toast.success(`Transaction ${tx.ref_id} completed successfully!`);
+            } else if (newStatus === 'Gagal') {
+              console.log('❌ Transaction failed');
+              toast.error(`Transaction ${tx.ref_id} failed: ${result.data.message}`);
+            }
+          } else {
+            console.log(`🔍 Transaction ${tx.ref_id} status unchanged: ${tx.status}`);
+          }
+        } catch (err) {
+          console.error(`❌ Error checking transaction ${tx.ref_id}:`, err);
+          console.error('❌ Error details:', {
+            message: err.message,
+            stack: err.stack
+          });
+          toast.error(`Error checking transaction ${tx.ref_id}: ${err.message}`);
+        }
+      }
+
+      console.log(`\n=============================================================
+      🔄 Cron Job Completed at ${new Date().toISOString()}
+      ==============================================================
+      `);
+    } catch (err) {
+      console.error('❌ Error in checkPendingTransactions:', err);
+      console.error('❌ Error details:', {
+        message: err.message,
+        stack: err.stack
+      });
+      toast.error('Error in transaction status check');
+    }
+  };
+
+  // Start cron job when component mounts
+  useEffect(() => {
+    // Schedule cron job to run every minute
+    cronJob = cron.schedule('*/1 * * * *', checkPendingTransactions);
+
+    // Initial check when component mounts
+    checkPendingTransactions();
+
+    // Cleanup on unmount
+    return () => {
+      if (cronJob) {
+        cronJob.stop();
+        cronJob = null;
+      }
+    };
+  }, []);
+
   const [activeTab, setActiveTab] = useState("dashboard");
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
