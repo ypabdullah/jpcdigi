@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import cron from 'node-cron';
+
 import { Helmet } from "react-helmet";
 import { 
   Card, 
@@ -32,9 +32,6 @@ import { RealtimeChannel } from "@supabase/supabase-js";
 import { dataTagSymbol } from "@tanstack/react-query";
 
 export default function PPOBAdminPage() {
-  // Cron job instance
-  let cronJob: cron.ScheduledTask | null = null;
-
   // Function to check pending transactions
   const checkPendingTransactions = async () => {
     try {
@@ -195,20 +192,17 @@ export default function PPOBAdminPage() {
     }
   };
 
-  // Start cron job when component mounts
+  // Use setInterval instead of cron for client-side
   useEffect(() => {
-    // Schedule cron job to run every minute
-    cronJob = cron.schedule('*/1 * * * *', checkPendingTransactions);
-
     // Initial check when component mounts
     checkPendingTransactions();
 
+    // Schedule to run every minute
+    const interval = setInterval(checkPendingTransactions, 60000);
+
     // Cleanup on unmount
     return () => {
-      if (cronJob) {
-        cronJob.stop();
-        cronJob = null;
-      }
+      clearInterval(interval);
     };
   }, []);
 
