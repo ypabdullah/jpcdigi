@@ -199,18 +199,17 @@ export default function PPOBAdminPage() {
   const fetchDigiflazzTransactions = async () => {
     setIsLoading(true);
     try {
-      const functionUrl = '/digiflazz-proxy/v1/transaction-history';
-      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}history`;
-      const sign = CryptoJS.MD5(signRaw).toString();
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://202.10.44.157:5173';
+      const endpoint = '/digiflazz-proxy/v1/transaction-history';
       
-      const response = await fetch(functionUrl, {
+      const response = await fetch(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           username: digiflazzConfig.username,
-          sign: sign
+          sign: digiflazzConfig.api_key
         }),
       });
       
@@ -224,12 +223,13 @@ export default function PPOBAdminPage() {
       } else {
         const data = await response.json();
         console.log('Digiflazz Transaction History Response:', data); // Log response for debugging
-        if (data && Array.isArray(data.data)) {
-          setDigiflazzTransactions(data.data);
-        } else {
-          console.error('Unexpected transaction data structure from Digiflazz API', data);
-          setDigiflazzTransactions([]);
-        }
+        
+        // Handle different response structures
+        const transactions = data.data || 
+          (data.message && data.rc ? [data] : []) ||
+          [];
+        
+        setDigiflazzTransactions(transactions);
       }
     } catch (error) {
       console.error('Error fetching Digiflazz transactions:', error);

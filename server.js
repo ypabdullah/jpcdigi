@@ -14,8 +14,8 @@ import bodyParser from 'body-parser';
 // Constants and utilities
 const TRANSACTION_STATUS = {
   PENDING: 'Pending',
-  SUCCESS: 'Success',
-  FAILED: 'Failed',
+  SUCCESS: 'Berhasil',
+  FAILED: 'Gagal',
   TIMEOUT: 'Timeout'
 };
 
@@ -390,10 +390,11 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
   try {
     console.log('🚀 Proxying transaction history request to Digiflazz');
     
+    // Get request body
+    const body = req.body;
+    
     // Generate signature
-    const refId = req.body.ref_id;
-    const buyerTxId = req.body.buyerTxId;
-    const signValue = `status_${refId || buyerTxId}`;
+    const signValue = 'history';
     const sign = crypto.createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
       .update(signValue)
       .digest('hex');
@@ -404,19 +405,47 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        username: process.env.DIGIFLAZZ_USERNAME,
-        sign: sign,
-        ref_id: refId || buyerTxId
+        username: body.username,
+        sign: body.sign,
+        cmd: 'transaction-history'
       })
     });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+    // Get response text first to handle non-JSON responses
+    const responseText = await response.text();
+    
+    // Try to parse JSON response
+    let result;
+    try {
+      result = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('❌ Error parsing response:', parseError);
+      result = { 
+        status: 'error',
+        message: 'Invalid response format from Digiflazz',
+        raw: responseText
+      };
     }
 
-    const result = await response.json();
     console.log('✅ Transaction history response:', result);
-    res.status(200).json(result);
+    
+    // Handle different response structures
+    if (result.status === 'error') {
+      return res.status(400).json(result);
+    }
+
+    // If response contains data, return it
+    if (result.data) {
+      return res.status(200).json(result);
+    }
+
+    // If response is an object with message/rc, wrap it in data
+    if (result.message && result.rc) {
+      return res.status(200).json({ data: result });
+    }
+
+    // Default response
+    return res.status(200).json({ data: [] });
   } catch (error) {
     console.error('❌ Error proxying transaction history:', error);
     res.status(500).json({ status: 'error', message: 'Failed to fetch transaction history', data: {} });
