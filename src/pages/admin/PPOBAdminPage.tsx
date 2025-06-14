@@ -202,6 +202,10 @@ export default function PPOBAdminPage() {
       const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://202.10.44.157:5173';
       const endpoint = '/digiflazz-proxy/v1/transaction-history';
       
+      // Generate proper signature using username and api_key
+      const signRaw = `${digiflazzConfig.username}${digiflazzConfig.api_key}history`;
+      const sign = CryptoJS.MD5(signRaw).toString();
+      
       const response = await fetch(`${baseUrl}${endpoint}`, {
         method: 'POST',
         headers: {
@@ -209,7 +213,7 @@ export default function PPOBAdminPage() {
         },
         body: JSON.stringify({
           username: digiflazzConfig.username,
-          sign: digiflazzConfig.api_key
+          sign: sign
         }),
       });
       

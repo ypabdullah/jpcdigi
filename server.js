@@ -393,11 +393,18 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
     // Get request body
     const body = req.body;
     
-    // Generate signature
-    const signValue = 'history';
-    const sign = crypto.createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
-      .update(signValue)
+    // Verify incoming signature
+    const expectedSign = crypto.createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(`${body.username}${process.env.DIGIFLAZZ_API_KEY}history`)
       .digest('hex');
+
+    if (body.sign !== expectedSign) {
+      console.error('❌ Invalid signature:', { received: body.sign, expected: expectedSign });
+      return res.status(401).json({
+        status: 'error',
+        message: 'Invalid signature'
+      });
+    }
 
     const response = await fetch('https://api.digiflazz.com/v1/transaction-history', {
       method: 'POST',
@@ -406,7 +413,7 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
       },
       body: JSON.stringify({
         username: body.username,
-        sign: body.sign,
+        sign: expectedSign,
         cmd: 'transaction-history'
       })
     });
@@ -478,9 +485,81 @@ app.post('/digiflazz-proxy/v1/cek-saldo', async (req, res) => {
     res.status(200).json(result);
   } catch (error) {
     console.error('❌ Error proxying balance check:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to check balance', data: {} });
+    res.status(500).json({ 
+      status: 'error', 
+      message: 'Failed to process balance check', 
+      data: result 
+    });
   }
 });
+
+// Export the balance check endpoint
+exports.cekSaldo = app.post('/digiflazz-proxy/v1/cek-saldo');
+
+// Function to poll Digiflazz API for transaction status
+const pollDigiflazzStatus = async function(refId, buyerTxId) {
+  try {
+    console.log('🔄 Polling status for ref_id:', refId);
+    
+    // Generate signature
+    const signValue = `status_${refId || buyerTxId}`;
+    const sign = crypto.createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(signValue)
+      .digest('hex');
+
+    const response = await fetch('https://api.digiflazz.com/v1/transaction-status', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        sign: sign,
+        ref_id: refId || buyerTxId,
+        cmd: 'status'
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const result = await response.json();
+    console.log('✅ Transaction status response:', result);
+    
+    if (result.status === 'success' && result.data) {
+      const data = result.data;
+      if (data.status === 'berhasil' || data.status === 'gagal') {
+        console.log('✅ Status updated to', data.status);
+        
+        // Update transaction in Supabase
+        const { error: updateError } = await supabase
+          .from('transaksi_digiflazz')
+          .update({
+            status: data.status,
+            message: data.message,
+            rc: data.rc,
+            sn: data.sn,
+            price: data.price,
+            buyer_last_saldo: data.buyer_last_saldo,
+            tele: data.tele,
+            wa: data.wa,
+            updated_at: new Date().toISOString()
+          })
+          .eq('ref_id', refId || buyerTxId);
+
+        if (updateError) {
+          console.error('❌ Error updating transaction:', updateError);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('❌ Error polling transaction status:', error);
+  }
+};
+
+// Export the function
+exports.pollDigiflazzStatus = pollDigiflazzStatus;
 
 function setupCronJobs() {
   try {
@@ -493,11 +572,15 @@ function setupCronJobs() {
         const { data, error } = await supabase
           .from('transaksi_digiflazz')
           .select('*')
-          .eq('status', 'Pending');
+          .eq('status', 'pending');
 
-        if (error) {
-          console.error('❌ Error fetching pending transactions:', error.message);
-          return;
+        if (error) throw error;
+        
+        console.log('🔍 Found', data.length, 'pending transactions. Polling now...');
+        
+        // Poll status for each pending transaction
+        for (const transaction of data) {
+          await pollDigiflazzStatus(transaction.ref_id);
         }
 
         if (!data || data.length === 0) {
