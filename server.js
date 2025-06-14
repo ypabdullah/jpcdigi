@@ -430,8 +430,8 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
       result = { 
         status: 'error',
         message: 'Invalid response format from Digiflazz',
-        raw: responseText
       };
+      return res.status(200).json({ data: result });
     }
 
     console.log('✅ Transaction history response:', result);
@@ -443,12 +443,7 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
 
     // If response contains data, return it
     if (result.data) {
-      return res.status(200).json(result);
-    }
-
-    // If response is an object with message/rc, wrap it in data
-    if (result.message && result.rc) {
-      return res.status(200).json({ data: result });
+      return res.status(200).json({ data: result.data });
     }
 
     // Default response
@@ -459,7 +454,8 @@ app.post('/digiflazz-proxy/v1/transaction-history', async (req, res) => {
   }
 });
 
-app.post('/digiflazz-proxy/v1/cek-saldo', async (req, res) => {
+// Define the balance check handler
+const cekSaldoHandler = async (req, res) => {
   try {
     console.log('🚀 Proxying balance check request to Digiflazz');
     
@@ -491,10 +487,13 @@ app.post('/digiflazz-proxy/v1/cek-saldo', async (req, res) => {
       data: result 
     });
   }
-});
+};
 
-// Export the balance check endpoint
-exports.cekSaldo = app.post('/digiflazz-proxy/v1/cek-saldo');
+// Register the balance check endpoint
+app.post('/digiflazz-proxy/v1/cek-saldo', cekSaldoHandler);
+
+// Export the handler
+export { cekSaldoHandler as cekSaldo };
 
 // Function to poll Digiflazz API for transaction status
 const pollDigiflazzStatus = async function(refId, buyerTxId) {
@@ -559,7 +558,7 @@ const pollDigiflazzStatus = async function(refId, buyerTxId) {
 };
 
 // Export the function
-exports.pollDigiflazzStatus = pollDigiflazzStatus;
+export { pollDigiflazzStatus };
 
 function setupCronJobs() {
   try {
