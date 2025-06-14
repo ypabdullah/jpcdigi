@@ -12,10 +12,10 @@ import rateLimit from 'express-rate-limit';
 
 // Transaction status constants
 const TRANSACTION_STATUS = {
-  PENDING: 'pending',
-  SUCCESS: 'berhasil',
-  FAILED: 'gagal',
-  TIMEOUT: 'timeout'
+  PENDING: 'Pending',
+  SUCCESS: 'Berhasil',
+  FAILED: 'Gagal',
+  TIMEOUT: 'Timeout'
 };
 
 // Rate limiting middleware
@@ -485,190 +485,40 @@ app.post('/payload', limiter, async (req, res) => {
   }
 });
 
-// Webhook test proxy route
-app.post('/api/test-webhook-proxy', async (req, res) => {
-  try {
-    console.log('🚀 Forwarding webhook test to Digiflazz');
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Body:', JSON.stringify(req.body, null, 2));
-
-    // Forward request to Digiflazz
-    const response = await fetch('https://api.digiflazz.com/v1/webhook-test', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DIGIFLAZZ_API_KEY}`
-      },
-      body: JSON.stringify(req.body)
-    });
-
-    const data = await response.json();
-    console.log('Digiflazz webhook test response:', data);
-
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('❌ Error forwarding webhook test:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to forward webhook test', data: {} });
-  }
-});
-    const response = await fetch('https://api.digiflazz.com/v1/webhook-test', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.DIGIFLAZZ_API_KEY}`
-      },
-      body: JSON.stringify(req.body)
-    });
-
-    const data = await response.json();
-    console.log('Digiflazz webhook test response:', data);
-
-    res.status(response.status).json(data);
-  } catch (error) {
-    console.error('❌ Error forwarding webhook test:', error);
-    res.status(500).json({ status: 'error', message: 'Failed to forward webhook test', data: {} });
-  }
-});
-
-const setupCronJobs = () => {
-  // Cron job untuk memeriksa transaksi pending
-  cron.schedule('*/10 * * * *', async () => {
-    console.log('⏱️ Running cron job to check pending transactions');
-    
-    try {
-      // Get all pending transactions
-      const { data: pending, error: fetchError } = await supabase
-        .from('transaksi_digiflazz')
-        .select('*')
-        .eq('status', TRANSACTION_STATUS.PENDING);
-
-      if (fetchError) {
-        console.error('❌ Error fetching pending transactions:', fetchError);
-        return;
-      }
-
-      if (!pending || pending.length === 0) {
-        console.log('✅ No pending transactions to check');
-        return;
-      }
-
-      console.log(`🔄 Checking ${pending.length} pending transactions`);
-
-      // Check each pending transaction
-      for (const tx of pending) {
-        try {
-          await pollDigiflazzStatus(tx.ref_id);
-        } catch (error) {
-          console.error(`❌ Error checking transaction ${tx.ref_id}:`, error);
+function setupCronJobs() {
+    // Cron ini akan jalan tiap 1 menit
+    cron.schedule('*/1 * * * *', async () => {
+      console.log('⏰ Running polling job: checking pending transactions');
+  
+      try {
+        const { data, error } = await supabase
+          .from('transaksi_digiflazz')
+          .select('ref_id, buyer_sku_code')
+          .eq('status', TRANSACTION_STATUS.PENDING);
+  
+        if (error) {
+          console.error('❌ Error fetching pending transactions:', error.message);
+          return;
         }
-      }
-
-    } catch (error) {
-      console.error('❌ Error in cron job:', error);
-    }
-  });
-
-  // Cron job untuk membersihkan transaksi timeout
-  cron.schedule('0 * * * *', async () => {
-    console.log('⏱️ Running cron job to clean up timeout transactions');
-    
-    try {
-      // Get all transactions that have exceeded the 1 hour limit
-      const { data: timeoutTx, error: fetchError } = await supabase
-        .from('transaksi_digiflazz')
-        .select('*')
-        .eq('status', TRANSACTION_STATUS.PENDING)
-        .lt('created_at', new Date(Date.now() - 3600000)) // 1 hour ago
-        .timeout(10000); // 10 second timeout
-
-      if (fetchError) {
-        console.error('❌ Error fetching timeout transactions:', fetchError);
-        return;
-      }
-
-      if (!timeoutTx || timeoutTx.length === 0) {
-        console.log('✅ No timeout transactions to handle');
-        return;
-      }
-
-      console.log(`⏰ Found ${timeoutTx.length} timeout transactions`);
-
-      // Update status to timeout
-      for (const tx of timeoutTx) {
-        try {
-          const { error: updateError } = await supabase
-            .from('transaksi_digiflazz')
-            .update({
-              status: TRANSACTION_STATUS.TIMEOUT,
-              message: 'Transaction timeout (exceeded 1 hour)'
-            })
-            .eq('ref_id', tx.ref_id);
-
-          if (updateError) {
-            console.error(`❌ Error updating timeout status for ${tx.ref_id}:`, updateError);
+  
+        if (!data || data.length === 0) {
+          console.log('✅ No pending transactions found');
+          return;
+        }
+  
+        console.log(`🔍 Found ${data.length} pending transactions. Polling now...`);
+  
+        for (const tx of data) {
+          if (tx.ref_id) {
+            await pollDigiflazzStatus(tx.ref_id, tx.buyer_sku_code || null);
           }
-        } catch (error) {
-          console.error(`❌ Error handling timeout for ${tx.ref_id}:`, error);
         }
+      } catch (err) {
+        console.error('❌ Cron job error:', err.message);
       }
-
-    } catch (error) {
-      console.error('❌ Error in timeout cron job:', error);
-    }
-  });
-
-  // Cron job untuk memperbarui harga produk (daily at 3:00 AM)
-  cron.schedule('0 3 * * *', async () => {
-    console.log('⏱️ Running cron job to update product prices');
-    
-    try {
-      // Generate signature
-      const signValue = 'price-list';
-      const sign = crypto
-        .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
-        .update(signValue)
-        .digest('hex');
-
-      const response = await fetch(`${DIGIFLAZZ_BASE_URL}/v1/price-list`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          username: process.env.DIGIFLAZZ_USERNAME,
-          sign: sign
-        })
-      });
-
-      const result = await response.json();
-      
-      if (result.status === 'success' && result.data) {
-        // Update or insert prices in Supabase
-        const { error: updateError } = await supabase
-          .from('ppob_products')
-          .upsert(result.data.map(item => ({
-            sku_code: item.sku_code,
-            name: item.name,
-            price: item.price,
-            description: item.description,
-            updated_at: new Date().toISOString()
-          })));
-
-        if (updateError) {
-          console.error('❌ Error updating product prices:', updateError);
-        } else {
-          console.log('✅ Product prices successfully updated');
-        }
-      } else {
-        console.error('❌ Failed to fetch price list:', result.message || 'Unknown error');
-      }
-
-    } catch (error) {
-      console.error('❌ Error in price list cron job:', error);
-    }
-  });
-});
-
+    });
+  }
+  
 const server = http.createServer(app);
 
 server.listen(port, () => {
@@ -676,4 +526,4 @@ server.listen(port, () => {
   setupCronJobs();
 });
 
-module.exports = server;
+export default server;
