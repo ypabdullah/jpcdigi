@@ -46,10 +46,170 @@ dotenv.config();
 
 const app = express();
 
+// CORS middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.status(200).json({ message: 'Preflight request successful' });
+  } else {
+    next();
+  }
+});
+
+// Body parser
+app.use(bodyParser.json({ type: 'application/json' }));
+
 // Serve static files from the dist directory
 app.use(express.static('dist'));
 
-// Serve the main application page
+// Webhook endpoint
+app.post('/payload', limiter, async (req, res) => {
+  try {
+    console.log('📩 Webhook received:', new Date().toISOString());
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+
+    // Verify signature
+    const signature = req.headers['x-digiflazz-signature'];
+    if (!signature) {
+      console.error('❌ Missing signature header');
+      return res.status(401).json({ status: 'error', message: 'Missing signature' });
+    }
+
+    // Get the raw body for signature verification
+    const rawBody = await new Promise((resolve) => {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        resolve(body);
+      });
+    });
+
+    // Generate expected signature
+    const expectedSignature = crypto
+      .createHmac('sha1', secret)
+      .update(rawBody)
+      .digest('hex');
+
+    if (signature !== expectedSignature) {
+      console.error('❌ Invalid signature');
+      return res.status(401).json({ status: 'error', message: 'Invalid signature' });
+    }
+
+    // Handle webhook data
+    const eventType = req.headers['x-digiflazz-event'];
+    if (eventType === 'create') {
+      // Save transaction in Supabase
+      const { error } = await supabase
+        .from('transaksi_digiflazz')
+        .insert([
+          {
+            ref_id: req.body.ref_id,
+            customer_no: req.body.customer_no,
+            buyer_sku_code: req.body.buyer_sku_code,
+            status: req.body.status,
+            message: req.body.message,
+            rc: req.body.rc,
+            sn: req.body.sn,
+            buyer_last_saldo: req.body.buyer_last_saldo,
+            tele: req.body.tele,
+            wa: req.body.wa,
+            transaction_date: new Date().toISOString()
+          }
+        ]);
+
+      if (error) {
+        console.error('❌ Error saving webhook data:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to save webhook data' });
+      }
+
+      console.log('✅ Webhook data saved successfully');
+    } else if (eventType === 'update') {
+      // Update transaction status in Supabase
+      const { error } = await supabase
+        .from('transaksi_digiflazz')
+        .update({
+          status: req.body.status,
+          message: req.body.message,
+          rc: req.body.rc,
+          sn: req.body.sn,
+          updated_at: new Date().toISOString()
+        })
+        .eq('ref_id', req.body.ref_id);
+
+      if (error) {
+        console.error('❌ Error updating webhook data:', error);
+        return res.status(500).json({ status: 'error', message: 'Failed to update webhook data' });
+      }
+
+      console.log('✅ Webhook data updated successfully');
+    }
+
+    res.status(200).json({ status: 'success', message: 'Webhook processed successfully' });
+  } catch (error) {
+    console.error('❌ Error processing webhook:', error);
+    res.status(500).json({ status: 'error', message: 'Internal server error', data: {} });
+  }
+});
+
+// PLN inquiry proxy
+app.post('/digiflazz-proxy/v1/inquiry-pln', async (req, res) => {
+  try {
+    console.log('🚀 Proxying PLN inquiry request to Digiflazz');
+    
+    // Get request body
+    const body = req.body;
+    console.log('Body:', JSON.stringify(body, null, 2));
+
+    // Generate signature
+    const signValue = `inquiry-pln_${body.customer_no}`;
+    const sign = crypto
+      .createHmac('sha1', process.env.DIGIFLAZZ_API_KEY)
+      .update(signValue)
+      .digest('hex');
+
+    // Forward request to Digiflazz
+    const response = await fetch(`${DIGIFLAZZ_BASE_URL}/v1/inquiry-pln`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      },
+      body: JSON.stringify({
+        username: process.env.DIGIFLAZZ_USERNAME,
+        sign: sign,
+        customer_no: body.customer_no
+      })
+    });
+
+    // Check response status
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Digiflazz API returned status ${response.status}: ${errorText}`);
+      return res.status(response.status).json({
+        status: 'error',
+        message: errorText
+      });
+    }
+
+    const data = await response.json();
+    console.log('Digiflazz PLN inquiry response:', JSON.stringify(data, null, 2));
+
+    res.status(response.status).json(data);
+  } catch (error) {
+    console.error('❌ Error proxying PLN inquiry:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to proxy PLN inquiry request'
+    });
+  }
+});
+
+// Catch-all route for serving the main application page
 app.get('*', (req, res) => {
   res.sendFile(join(__dirname, 'dist', 'index.html'));
 });
