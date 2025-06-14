@@ -203,29 +203,38 @@ app.post('/digiflazz-proxy/v1/:endpoint', limiter, async (req, res) => {
 
     const apiRequestBody = {
       username: process.env.DIGIFLAZZ_USERNAME,
-      sign: sign,
-      command: command
+      sign: sign
     };
-
-    // Validate transaction data
-    try {
-      validateTransactionData(body);
-    } catch (error) {
-      return res.status(400).json({ status: 'error', message: error.message });
-    }
 
     // Add specific fields based on command
     switch(command) {
       case 'transaction':
-        apiRequestBody.ref_id = body.ref_id || crypto.randomUUID();
-        apiRequestBody.customer_no = body.customer_no;
-        apiRequestBody.buyer_sku_code = body.buyer_sku_code;
-        apiRequestBody.price = body.price;
-        apiRequestBody.cmd = 'transaction';
+        try {
+          validateTransactionData(body);
+          apiRequestBody.ref_id = body.ref_id || crypto.randomUUID();
+          apiRequestBody.customer_no = body.customer_no;
+          apiRequestBody.buyer_sku_code = body.buyer_sku_code;
+          apiRequestBody.price = body.price;
+          apiRequestBody.cmd = 'transaction';
+        } catch (error) {
+          return res.status(400).json({ status: 'error', message: error.message });
+        }
         break;
       case 'inquiry-pln':
         apiRequestBody.customer_no = body.customer_no;
         apiRequestBody.cmd = 'inquiry-pln';
+        break;
+      case 'price-list':
+        apiRequestBody.cmd = 'price-list';
+        break;
+      case 'cek-saldo':
+        apiRequestBody.cmd = 'cek-saldo';
+        break;
+      case 'transaction-history':
+        apiRequestBody.cmd = 'transaction-history';
+        if (body.ref_id || body.buyerTxId) {
+          apiRequestBody.ref_id = body.ref_id || body.buyerTxId;
+        }
         break;
     }
 
