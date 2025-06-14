@@ -207,16 +207,25 @@ app.post('/digiflazz-proxy/v1/:endpoint', limiter, async (req, res) => {
       command: command
     };
 
+    // Validate transaction data
+    try {
+      validateTransactionData(body);
+    } catch (error) {
+      return res.status(400).json({ status: 'error', message: error.message });
+    }
+
     // Add specific fields based on command
     switch(command) {
       case 'transaction':
-        apiRequestBody.ref_id = body.ref_id;
+        apiRequestBody.ref_id = body.ref_id || crypto.randomUUID();
         apiRequestBody.customer_no = body.customer_no;
         apiRequestBody.buyer_sku_code = body.buyer_sku_code;
         apiRequestBody.price = body.price;
+        apiRequestBody.cmd = 'transaction';
         break;
       case 'inquiry-pln':
         apiRequestBody.customer_no = body.customer_no;
+        apiRequestBody.cmd = 'inquiry-pln';
         break;
     }
 
