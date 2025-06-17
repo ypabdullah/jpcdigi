@@ -134,67 +134,6 @@ exports.handler = async function(event, context) {
           body: JSON.stringify(priceListData)
         };
 
-      case 'v1/transaction':
-        console.log('Handling transaction request');
-        // Log credentials used for signature (mask API key for security)
-        console.log('Using credentials - Username:', DIGIFLAZZ_USERNAME);
-        console.log('API Key (first 4 chars):', DIGIFLAZZ_API_KEY ? DIGIFLAZZ_API_KEY.substring(0, 4) + '****' : 'Not set');
-        
-        let transactionBody = requestBody;
-        // If no signature provided, generate one
-        if (!requestBody.sign && requestBody.ref_id) {
-          console.log('No signature provided, generating one for transaction');
-          const signTransaction = generateSignature(DIGIFLAZZ_USERNAME, DIGIFLAZZ_API_KEY, requestBody.ref_id);
-          transactionBody = { ...requestBody, sign: signTransaction };
-          console.log('Generated signature:', signTransaction);
-        } else if (requestBody.sign) {
-          console.log('Signature provided in request, using as is');
-        } else {
-          console.log('No signature and no ref_id provided, proceeding without signature');
-        }
-        
-        // Log the final body sent to Digiflazz (mask sensitive fields if needed)
-        console.log('Final transaction body to Digiflazz:', { 
-          ...transactionBody, 
-          sign: transactionBody.sign ? transactionBody.sign.substring(0, 4) + '****' : 'Not set' 
-        });
-        
-        // Make request to Digiflazz API
-        const responseTransaction = await fetch(`${DIGIFLAZZ_BASE_URL}/v1/transaction`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(transactionBody)
-        });
-        
-        if (!responseTransaction.ok) {
-          const errorText = await responseTransaction.text();
-          console.error('Digiflazz API Transaction Error:', {
-            status: responseTransaction.status,
-            text: errorText,
-            body: { 
-              ...transactionBody, 
-              sign: transactionBody.sign ? transactionBody.sign.substring(0, 4) + '****' : 'Not set' 
-            }
-          });
-          
-          return {
-            statusCode: responseTransaction.status,
-            headers,
-            body: errorText
-          };
-        }
-        
-        const dataTransaction = await responseTransaction.json();
-        console.log('Transaction response:', dataTransaction);
-        
-        return {
-          statusCode: 200,
-          headers,
-          body: JSON.stringify(dataTransaction)
-        };
-
       default:
         return {
           statusCode: 404,
@@ -204,6 +143,116 @@ exports.handler = async function(event, context) {
           })
         };
     }
+  } catch (error) {
+    console.error('Error:', error);
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ 
+        message: 'Internal Server Error', 
+        error: error.message 
+      })
+    };
+  }
+};
+    });
+
+    // Handle response
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Digiflazz API Error:', {
+        status: response.status,
+        text: errorText,
+        body: requestBody,
+        endpoint: endpoint,
+        signData: signData
+      });
+      
+      return {
+        statusCode: response.status,
+        headers,
+        body: JSON.stringify({
+          message: `HTTP error! Status: ${response.status}`,
+          details: errorText,
+          request: requestBody,
+          endpoint: endpoint,
+          signData: signData
+        })
+      };
+      return {
+        statusCode: response.status,
+        headers,
+        body: JSON.stringify({
+          message: `HTTP error! Status: ${response.status}`,
+          details: errorText,
+          request: requestBody
+        })
+      };
+    }
+
+    // Parse and return response
+    const data = await response.json();
+    console.log('Digiflazz API Response:', JSON.stringify(data, null, 2));
+    
+    // Handle PLN inquiry response
+    if (event.path.includes('/v1/inquiry-pln')) {
+      const plnResponse = {
+        status: data.data?.status || 'Gagal',
+        message: data.data?.message || 'No message',
+        customer_no: data.data?.customer_no || requestBody.customer_no,
+        meter_no: data.data?.meter_no || 'N/A',
+        subscriber_id: data.data?.subscriber_id || 'N/A',
+        name: data.data?.name || 'N/A',
+        segment_power: data.data?.segment_power || 'N/A',
+        rc: data.data?.rc || 'N/A'
+      };
+      
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ data: plnResponse })
+      };
+    }
+
+    // Handle category list response
+    if (event.path.includes('/v1/service-list')) {
+      console.log('Category list response data:', data);
+      
+      // Handle different possible response formats
+      let categories = [];
+      if (data.data && data.data.categories) {
+        categories = data.data.categories;
+      } else if (data.data && Array.isArray(data.data)) {
+        categories = data.data;
+      }
+      
+      // Transform categories to include status
+      categories = categories.map(category => ({
+        ...category,
+        status: category.status || 'active',
+        category_id: category.category_id || category.id
+      }));
+
+      const categoryListResponse = {
+        status: data.data?.status || 'success',
+        message: data.data?.message || 'Categories fetched successfully',
+        categories
+      };
+      
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ data: categoryListResponse })
+      };
+    }
+
+    // Handle transaction status response
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify(data)
+    };
+
   } catch (error) {
     console.error('Error:', error);
     return {

@@ -36,174 +36,104 @@ import { digiflazzService } from '@/services/digiflazz';
 export default function PPOBAdminPage() {
   // Function to check pending transactions
   const checkPendingTransactions = async () => {
+    setIsCheckingPending(true);
     try {
-      console.log(`
-      ==============================================================
-      🔄 Cron Job Started at ${new Date().toISOString()}
-      ==============================================================
-      `);
+      if (!supabase) {
+        throw new Error("Supabase client not initialized");
+      }
       
-      // Get pending transactions from Supabase
-      const { data: pendingTx, error: fetchError } = await supabase
-        .from('transaksi_digiflazz')
-        .select('*')
-        .in('status', ['Pending', 'pending'])
-        .order('updated_at', { ascending: false });
-
-      if (fetchError) {
-        console.error(`❌ Error fetching pending transactions: ${fetchError.message}`);
-        console.error('❌ Detailed error:', fetchError.details);
-        toast.error('Error fetching pending transactions', { duration: 5000 });
+      // Fetch pending transactions from Supabase
+      const { data: pendingTransactions, error } = await supabase
+        .from("transaksi_digiflazz")
+        .select("*")
+        .eq("status", "Pending")
+        .limit(50);
+      
+      if (error) {
+        throw new Error(`Error fetching pending transactions: ${error.message}`);
+      }
+      
+      if (!pendingTransactions || pendingTransactions.length === 0) {
+        toast.info("Tidak ada transaksi pending yang ditemukan", { duration: 3000 });
         return;
       }
-
-      if (!pendingTx || pendingTx.length === 0) {
-        console.log(`✅ No pending transactions found`);
-        console.log(`=============================================================
-        🔄 Cron Job Completed at ${new Date().toISOString()}
-        ==============================================================
-        `);
-        return;
-      }
-
-      console.log(`🔍 Found ${pendingTx.length} pending transactions to check`);
-      console.log('🔍 List of pending transactions:');
-      pendingTx.forEach(tx => {
-        console.log(`  - ref_id: ${tx.ref_id}
-    - customer_no: ${tx.customer_no}
-    - buyer_sku_code: ${tx.buyer_sku_code}
-    - current status: ${tx.status}
-    - last updated: ${tx.updated_at}`);
-      });
       
-      // Process each pending transaction
-      for (const tx of pendingTx) {
+      console.log(`Found ${pendingTransactions.length} pending transactions to check`);
+      toast.info(`Memeriksa ${pendingTransactions.length} transaksi pending...`, { duration: 3000 });
+      
+      // Check status for each pending transaction via Digiflazz API
+      for (const tx of pendingTransactions) {
         try {
-          console.log(`\n----------------------------------------
-          🔄 Checking transaction ${tx.ref_id}...
-          ----------------------------------------`);
-          console.log('🔍 Transaction details:', {
-            ref_id: tx.ref_id,
-            customer_no: tx.customer_no,
-            buyer_sku_code: tx.buyer_sku_code,
-            current_status: tx.status
-          });
+          console.log(`Checking status for transaction ref_id: ${tx.ref_id}`);
           
-          // Generate signature with ref_id
-          const sign = CryptoJS.MD5(
-            `${digiflazzConfig?.username}${digiflazzConfig?.api_key}${tx.ref_id}`
-          ).toString();
-
-          // Check transaction status with Digiflazz
-          console.log('🚀 Sending request to Digiflazz API...');
-          const response = await fetch('/digiflazz-proxy/v1/transaction', {
+          // Prepare payload for status check
+          const username = digiflazzConfig?.username || '';
+          const apiKey = digiflazzConfig?.api_key || '';
+          
+          if (!username || !apiKey) {
+            throw new Error("Digiflazz credentials not available");
+          }
+          
+          const payload = {
+            username,
+            ref_id: tx.ref_id,
+            sign: generateSignature(username, apiKey, tx.ref_id),
+          };
+          
+          console.log(`Status check payload for ${tx.ref_id}:`, payload);
+          
+          // Send request to Digiflazz API through proxy
+          const response = await fetch('/.netlify/functions/digiflazz-proxy?action=status', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-              username: digiflazzConfig?.username || '',
-              ref_id: tx.ref_id,
-              sign: sign,
-              cmd: 'status', // Change to 'status' as per API requirement
-              buyer_sku_code: tx.buyer_sku_code // Add buyer_sku_code
-            })
+            body: JSON.stringify(payload),
           });
-
-          // Get response text first to handle non-JSON responses
-          const responseText = await response.text();
-          console.log('📊 Raw response:', responseText);
-
-          // Try to parse as JSON
-          let result;
-          try {
-            result = JSON.parse(responseText);
-          } catch (parseError) {
-            console.error('❌ Error parsing response:', parseError);
-            console.error('📋 Raw response:', responseText);
-            throw new Error(`Failed to parse response as JSON: ${parseError.message}`);
-          }
-
-          console.log('📊 Parsed response:', JSON.stringify(result, null, 2));
           
-          if (result.data && result.data.status) {
-            const newStatus = result.data.status;
-            console.log(`✅ Status updated to ${newStatus} for ref_id: ${tx.ref_id}`);
-            console.log('✅ Status change details:', {
-              ref_id: tx.ref_id,
-              old_status: tx.status,
-              new_status: newStatus,
-              message: result.data.message,
-              rc: result.data.rc,
-              sn: result.data.sn
-            });
-            
-            // Update transaction in Supabase
-            console.log('💾 Updating transaction in Supabase...');
-            const updateResult = await supabase
-              .from('transaksi_digiflazz')
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`Failed to check status for ${tx.ref_id}:`, errorText);
+            continue;
+          }
+          
+          const responseData = await response.json();
+          console.log(`Status check response for ${tx.ref_id}:`, responseData);
+          
+          // If status has changed, update it in Supabase
+          if (responseData.data && responseData.data.status !== tx.status) {
+            const { data: updateData, error: updateError } = await supabase
+              .from("transaksi_digiflazz")
               .update({
-                status: newStatus,
-                message: result.data.message,
-                rc: result.data.rc,
-                sn: result.data.sn,
-                buyer_last_saldo: result.data.buyer_last_saldo,
-                tele: result.data.tele,
-                wa: result.data.wa,
-                updated_at: new Date().toISOString()
+                status: responseData.data.status,
+                message: responseData.data.message,
+                sn: responseData.data.sn || tx.sn,
+                rc: responseData.data.rc || tx.rc,
+                updated_at: new Date().toISOString(),
               })
-              .eq('ref_id', tx.ref_id);
-
-            if (updateResult.error) {
-              console.error(`❌ Error updating transaction ${tx.ref_id}: ${updateResult.error.message}`);
-              console.error('❌ Detailed error:', updateResult.error.details);
-              toast.error(`Error updating transaction ${tx.ref_id}`, { duration: 5000 });
+              .eq("ref_id", tx.ref_id);
+              
+            if (updateError) {
+              console.error(`Failed to update status for ${tx.ref_id} in Supabase:`, updateError);
               continue;
             }
-            console.log('✅ Transaction updated in Supabase');
-
-            // Update local state
-            console.log('🔄 Updating local state...');
-            setTransactions(prev => 
-              prev.map(t => 
-                t.ref_id === tx.ref_id 
-                  ? { ...t, ...result.data, updated_at: new Date().toISOString() } 
-                  : t
-              )
-            );
-
-            // Show success toast for completed transactions
-            if (newStatus === 'Berhasil') {
-              console.log('🎉 Transaction completed successfully!');
-              toast.success(`Transaction ${tx.ref_id} completed successfully!`, { duration: 5000 });
-            } else if (newStatus === 'Gagal') {
-              console.log('❌ Transaction failed');
-              toast.error(`Transaction ${tx.ref_id} failed: ${result.data.message}`, { duration: 5000 });
-            }
-          } else {
-            console.log(`🔍 Transaction ${tx.ref_id} status unchanged: ${tx.status}`);
+            
+            console.log(`Updated status for ${tx.ref_id} to ${responseData.data.status}`);
+            toast.success(`Status transaksi ${tx.ref_id} diperbarui ke ${responseData.data.status}`, { duration: 3000 });
           }
-        } catch (err) {
-          console.error(`❌ Error checking transaction ${tx.ref_id}:`, err);
-          console.error('❌ Error details:', {
-            message: err.message,
-            stack: err.stack
-          });
-          toast.error(`Error checking transaction ${tx.ref_id}: ${err.message}`, { duration: 5000 });
+        } catch (err: any) {
+          console.error(`Error checking status for transaction ${tx.ref_id}:`, err.message);
         }
       }
-
-      console.log(`\n=============================================================
-      🔄 Cron Job Completed at ${new Date().toISOString()}
-      ==============================================================
-      `);
-    } catch (err) {
-      console.error('❌ Error in checkPendingTransactions:', err);
-      console.error('❌ Error details:', {
-        message: err.message,
-        stack: err.stack
-      });
-      toast.error('Error in transaction status check', { duration: 5000 });
+      
+      // Refresh the transaction list after checking pending transactions
+      fetchSupabaseTransactions();
+      
+    } catch (err: any) {
+      console.error("Error checking pending transactions:", err);
+      toast.error(`Gagal memeriksa transaksi pending: ${err.message}`, { duration: 5000 });
+    } finally {
+      setIsCheckingPending(false);
     }
   };
 
@@ -346,6 +276,7 @@ export default function PPOBAdminPage() {
   const [transactionHistory, setTransactionHistory] = useState<any[]>([]);
   const [supabaseChannel, setSupabaseChannel] = useState<RealtimeChannel | null>(null);
   const [isLoadingTransactions, setIsLoadingTransactions] = useState(false);
+  const [isCheckingPending, setIsCheckingPending] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -534,14 +465,17 @@ export default function PPOBAdminPage() {
   };
 
   const fetchSupabaseTransactions = async () => {
-    if (!supabase) return;
     setIsLoadingTransactions(true);
     try {
+      if (!supabase) {
+        throw new Error("Supabase client not initialized");
+      }
       const { data, error } = await supabase
-        .from('transaksi_digiflazz')
-        .select('*')
-        .order('updated_at', { ascending: false });
-
+        .from("transaksi_digiflazz")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(100);
+      
       if (error) throw error;
       if (data) {
         setSupabaseTransactions(data);
@@ -549,58 +483,26 @@ export default function PPOBAdminPage() {
         setSupabaseTransactions([]);
       }
     } catch (err: any) {
-      console.error('Error fetching Supabase transactions:', err);
-      toast.error('Gagal memuat transaksi dari Supabase', { duration: 5000 });
+      console.error("Error fetching Supabase transactions:", err);
+      toast.error("Gagal memuat transaksi dari Supabase", { duration: 5000 });
     } finally {
       setIsLoadingTransactions(false);
     }
   };
 
-  const saveTransactionToSupabase = async (transactionData: any) => {
+  const saveTransactionToSupabase = async (transaction: PPOBTransaction) => {
+    if (!supabase) return;
     try {
-      console.log('Attempting to save transaction to Supabase table transaksi_digiflazz', transactionData);
-      if (!supabase) {
-        console.error('Supabase client is not initialized');
-        toast.error('Database client tidak tersedia', { duration: 5000 });
-        return { success: false, error: 'Supabase client not initialized' };
-      }
-      console.log('Supabase client initialized with URL:', import.meta.env.VITE_SUPABASE_URL || 'Not set');
-      console.log('Supabase client initialized with Anon Key (first 10 chars):', (import.meta.env.VITE_SUPABASE_ANON_KEY || 'Not set').substring(0, 10) + '...');
-      
+      // Remove id and updated_at to let Supabase handle them if they are serial and timestamp with default now()
+      const { id, updated_at, ...transactionData } = transaction;
       const { data, error } = await supabase
         .from('transaksi_digiflazz')
-        .insert([
-          {
-            ref_id: transactionData.ref_id,
-            customer_no: transactionData.customer_no,
-            buyer_sku_code: transactionData.buyer_sku_code,
-            message: transactionData.message,
-            status: transactionData.status,
-            rc: transactionData.rc,
-            sn: transactionData.sn || '',
-            price: transactionData.price || 0,
-            created_at: new Date().toISOString(),
-            buyer_last_saldo: transactionData.buyer_last_saldo || 0,
-            tele: transactionData.tele || '',
-            wa: transactionData.wa || ''
-          },
-        ]);
-
-      if (error) {
-        console.error('Error saving transaction to Supabase:', error);
-        console.error('Error details:', JSON.stringify(error, null, 2));
-        toast.error(`Gagal menyimpan transaksi ke database: ${error.message}`, { duration: 5000 });
-        return { success: false, error: error.message };
-      } else {
-        console.log('Transaction successfully saved to Supabase:', data);
-        toast.success('Transaksi berhasil disimpan ke database', { duration: 5000 });
-        return { success: true, data };
-      }
-    } catch (error: any) {
-      console.error('Unexpected error saving transaction to Supabase:', error);
-      console.error('Full error object:', JSON.stringify(error, null, 2));
-      toast.error(`Gagal menyimpan transaksi: ${error.message || 'Unknown error'}`, { duration: 5000 });
-      return { success: false, error: error.message || 'Unknown error' };
+        .upsert([transactionData], { onConflict: 'ref_id' });
+      if (error) throw error;
+      toast.success('Transaksi berhasil disimpan ke Supabase', { duration: 5000 });
+    } catch (err: any) {
+      console.error('Error saving transaction to Supabase:', err);
+      toast.error('Gagal menyimpan transaksi ke Supabase', { duration: 5000 });
     }
   };
 

@@ -123,7 +123,7 @@ class DigiflazzService {
     try {
       console.log('Attempting to load Digiflazz credentials from Supabase');
       const { data, error } = await this.supabase
-        .from('api_credentials')
+        .from('digiflazz_config')
         .select('username, api_key')
         .eq('active', true)
         .limit(1)
