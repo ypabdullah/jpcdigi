@@ -1,4 +1,3 @@
-
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -27,23 +26,24 @@ import ChatPage from "./pages/ChatPage";
 import WhatsappVerificationPage from "./pages/WhatsappVerificationPage";
 
 // PPOB pages
-import PPOBPage from "./pages/ppob/PPOBPage";
-import PPOBHistoryPage from "./pages/ppob/PPOBHistoryPage";
-import VerificationPage from "./pages/ppob/VerificationPage";
-import PPOBWalletPage from "./pages/ppob/PPOBWalletPage";
-import PPOBDashboard from "./pages/ppob/PPOBDashboard";
-import PPOBActivityPage from "./pages/ppob/PPOBActivityPage";
-import PPOBPulsaDataPage from "./pages/ppob/PPOBPulsaDataPage";
-import PPOBSendPage from "./pages/ppob/PPOBSendPage";
-import PPOBRequestMoneyPage from "./pages/ppob/PPOBRequestMoneyPage";
-import PPOBTopUpPage from "./pages/ppob/PPOBTopUpPage";
-import PPOBElectricityPage from "./pages/ppob/PPOBElectricityPage";
-import PPOBEWalletPage from "./pages/ppob/PPOBEWalletPage";
-import PPOBGamesPage from "./pages/ppob/PPOBGamesPage";
-import PPOBAllServicesPage from "./pages/ppob/PPOBAllServicesPage";
-import PPOBTestPage from "./pages/ppob/PPOBTestPage";
-import PPOBGenericServicePage from "./pages/ppob/PPOBGenericServicePage";
-import PPOBInvestmentPage from "./pages/ppob/PPOBInvestmentPage";
+import PPOBPage from "@/pages/ppob/PPOBPage";
+import PPOBHistoryPage from "@/pages/ppob/PPOBHistoryPage";
+import VerificationPage from "@/pages/ppob/VerificationPage";
+import PPOBWalletPage from "@/pages/ppob/PPOBWalletPage";
+import PPOBDashboard from "@/pages/ppob/PPOBDashboard";
+import PPOBActivityPage from "@/pages/ppob/PPOBActivityPage";
+import PPOBPulsaDataPage from "@/pages/ppob/PPOBPulsaDataPage";
+import PPOBSendPage from "@/pages/ppob/PPOBSendPage";
+import PPOBRequestMoneyPage from "@/pages/ppob/PPOBRequestMoneyPage";
+import PPOBTopUpPage from "@/pages/ppob/PPOBTopUpPage";
+import PPOBElectricityPage from "@/pages/ppob/PPOBElectricityPage";
+import PPOBEWalletPage from "@/pages/ppob/PPOBEWalletPage";
+import PPOBGamesPage from "@/pages/ppob/PPOBGamesPage";
+import PPOBAllServicesPage from "@/pages/ppob/PPOBAllServicesPage";
+import PPOBTestPage from "@/pages/ppob/PPOBTestPage";
+import PPOBGenericServicePage from "@/pages/ppob/PPOBGenericServicePage";
+import PPOBInvestmentPage from "@/pages/ppob/PPOBInvestmentPage";
+import PPobpulsa from "@/pages/ppob/PPobpulsa";
 
 // Admin pages
 import { AdminDashboard } from "./pages/admin/AdminDashboard";
@@ -60,6 +60,7 @@ import { AdminChatPage } from "./pages/admin/AdminChatPage";
 import { VoucherPage } from "./pages/admin/VoucherPage";
 import { BroadcastPage } from "./pages/admin/BroadcastPage";
 import PPOBAdminPage from "./pages/admin/PPOBAdminPage";
+import PPOBPulsaCustomerPage from "./pages/ppob/PPOBPulsaCustomerPage";
 
 const queryClient = new QueryClient();
 
@@ -168,7 +169,7 @@ function App() {
               
               <Routes>
                 {/* Customer Routes */}
-                <Route path="/" element={<ProtectedRoute element={<AdminDashboard />} />} />
+                <Route path="/" element={<ProtectedRoute element={<Index />} />} />
                 <Route path="/search" element={<ProtectedRoute element={<SearchPage />} />} />
                 <Route path="/product/:id" element={<ProtectedRoute element={<ProductDetailPage />} />} />
                 <Route path="/cart" element={<ProtectedRoute element={<CartPage />} />} />
@@ -196,6 +197,7 @@ function App() {
                 <Route path="/ppob/test" element={<ProtectedRoute element={<PPOBTestPage />} />} />
                 <Route path="/ppob/electricity" element={<ProtectedRoute element={<PPOBElectricityPage />} />} />
                 <Route path="/ppob/ewallet" element={<ProtectedRoute element={<PPOBEWalletPage />} />} />
+                <Route path="/ppob/pulsa" element={<ProtectedRoute element={<PPOBPulsaCustomerPage />} />} />
                 
                 {/* New PPOB routes using generic service page */}
                 <Route path="/ppob/kredit" element={<ProtectedRoute element={<PPOBGenericServicePage />} />} />

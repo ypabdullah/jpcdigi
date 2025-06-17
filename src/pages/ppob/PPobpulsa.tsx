@@ -556,51 +556,19 @@ export default function PPOBAdminPage() {
     }
   };
 
-  const saveTransactionToSupabase = async (transactionData: any) => {
+  const saveTransactionToSupabase = async (transaction: PPOBTransaction) => {
+    if (!supabase) return;
     try {
-      console.log('Attempting to save transaction to Supabase table transaksi_digiflazz', transactionData);
-      if (!supabase) {
-        console.error('Supabase client is not initialized');
-        toast.error('Database client tidak tersedia', { duration: 5000 });
-        return { success: false, error: 'Supabase client not initialized' };
-      }
-      console.log('Supabase client initialized with URL:', import.meta.env.VITE_SUPABASE_URL || 'Not set');
-      console.log('Supabase client initialized with Anon Key (first 10 chars):', (import.meta.env.VITE_SUPABASE_ANON_KEY || 'Not set').substring(0, 10) + '...');
-      
+      // Remove id and updated_at to let Supabase handle them if they are serial and timestamp with default now()
+      const { id, updated_at, ...transactionData } = transaction;
       const { data, error } = await supabase
         .from('transaksi_digiflazz')
-        .insert([
-          {
-            ref_id: transactionData.ref_id,
-            customer_no: transactionData.customer_no,
-            buyer_sku_code: transactionData.buyer_sku_code,
-            message: transactionData.message,
-            status: transactionData.status,
-            rc: transactionData.rc,
-            sn: transactionData.sn || '',
-            price: transactionData.price || 0,
-            created_at: new Date().toISOString(),
-            buyer_last_saldo: transactionData.buyer_last_saldo || 0,
-            tele: transactionData.tele || '',
-            wa: transactionData.wa || ''
-          },
-        ]);
-
-      if (error) {
-        console.error('Error saving transaction to Supabase:', error);
-        console.error('Error details:', JSON.stringify(error, null, 2));
-        toast.error(`Gagal menyimpan transaksi ke database: ${error.message}`, { duration: 5000 });
-        return { success: false, error: error.message };
-      } else {
-        console.log('Transaction successfully saved to Supabase:', data);
-        toast.success('Transaksi berhasil disimpan ke database', { duration: 5000 });
-        return { success: true, data };
-      }
-    } catch (error: any) {
-      console.error('Unexpected error saving transaction to Supabase:', error);
-      console.error('Full error object:', JSON.stringify(error, null, 2));
-      toast.error(`Gagal menyimpan transaksi: ${error.message || 'Unknown error'}`, { duration: 5000 });
-      return { success: false, error: error.message || 'Unknown error' };
+        .upsert([transactionData], { onConflict: 'ref_id' });
+      if (error) throw error;
+      toast.success('Transaksi berhasil disimpan ke Supabase', { duration: 5000 });
+    } catch (err: any) {
+      console.error('Error saving transaction to Supabase:', err);
+      toast.error('Gagal menyimpan transaksi ke Supabase', { duration: 5000 });
     }
   };
 
@@ -747,13 +715,7 @@ export default function PPOBAdminPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
-        
       });
-
-
-
-
-      
       if (!response.ok) {
         const errorText = await response.text();
         console.error('Test purchase failed:', errorText);

@@ -11,19 +11,59 @@ import { Product } from "@/data/models";
 import { formatRupiah } from "@/lib/utils";
 import { Icons } from "@/components/Icons";
 import { Helmet } from "react-helmet";
+import { getPPOBServices } from "@/services/ppobService";
+import { PPOBService } from '@/integrations/supabase/ppob-types';
 
-const Index = () => {
+interface ServiceCategory {
+  id: string;
+  name: string;
+  icon: React.ReactNode;
+  count: number;
+}
+
+function Index() {
   const navigate = useNavigate();
   const { addItem } = useCart();
   const [featuredProducts, setFeaturedProducts] = useState<Product[]>([]);
   const [discountedProducts, setDiscountedProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<{id: string, name: string, count: number, image: string}[]>([]);
-  const [loading, setLoading] = useState(true);
-  // Removed activeTab state
+  const [serviceCategories, setServiceCategories] = useState<PPOBService[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchServices = async () => {
+      try {
+        const services = await getPPOBServices();
+        setServiceCategories(services);
+      } catch (error) {
+        console.error("Error fetching services:", error);
+      }
+    };
+
+    const fetchProducts = async () => {
+      try {
+        // Fetch featured products
+        const featuredRes = await fetch('/api/products?featured=true');
+        const featuredData = await featuredRes.json();
+        setFeaturedProducts(featuredData.products);
+
+        // Fetch discounted products
+        const discountedRes = await fetch('/api/products?discounted=true');
+        const discountedData = await discountedRes.json();
+        setDiscountedProducts(discountedData.products);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to load products');
+      }
+    };
+
+    fetchServices();
+    fetchProducts();
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
-      setLoading(true);
+      setIsLoading(true);
       try {
         // Fetch featured products
         const { data: featuredData, error: featuredError } = await supabase
@@ -66,7 +106,7 @@ const Index = () => {
       } catch (error) {
         console.error("Error fetching data:", error);
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
 
@@ -99,14 +139,15 @@ const Index = () => {
               Coba Gunakan Arang Oven Yang Bersih Dan 3x Lebih Awet
             </p>
             <Link to="/search">
-              <Button className="bg-flame-500 hover:bg-flame-600">
+              <Button className="inline-flex items-center gap-2">
+                <ShoppingCart className="h-4 w-4" />
                 Lihat Produk
               </Button>
             </Link>
           </div>
         </div>
 
-        {/* PPOB Menu Button - New section added above featured products */}
+        {/* PPOB Menu Button */}
         <div className="mb-6">
           <Card 
             className="overflow-hidden cursor-pointer bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:opacity-95 transition-opacity"
@@ -127,105 +168,116 @@ const Index = () => {
           </Card>
         </div>
 
-        {/* Featured Products */}
-        <div className="mb-8">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">Produk Unggulan</h2>
-              <Link to="/search?featured=true" className="text-flame-500 text-sm">
-                Lihat Semua
-              </Link>
-            </div>
-            
-            {loading ? (
-              <div className="flex justify-center items-center h-32">
-                <Loader2 className="h-8 w-8 animate-spin text-flame-500" />
+        {/* Service Categories */}
+        <div className="space-y-4 mb-6">
+          <h2 className="text-lg font-semibold">Layanan PPOB</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {isLoading ? (
+              <div className="flex justify-center items-center h-24">
+                <Loader2 className="h-6 w-6 animate-spin text-flame-500" />
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-4">
+              serviceCategories.map((service) => (
+                <Link 
+                  key={service.id} 
+                  to={service.route}
+                  className="p-4 bg-white rounded-lg shadow-sm hover:bg-gray-50 transition-colors"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    {service.icon ? (
+                      <img src={service.icon} alt={`${service.name} icon`} className="h-5 w-5" />
+                    ) : (
+                      <div className="h-5 w-5 bg-gray-200 rounded-lg" />
+                    )}
+                  </div>
+                  <h3 className="font-medium">{service.name}</h3>
+                </Link>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Featured Products */}
+        <div className="space-y-4 mb-6">
+          <h2 className="text-lg font-semibold">Produk Terbaru</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {isLoading ? (
+              <div className="flex justify-center items-center h-24">
+                <Loader2 className="h-6 w-6 animate-spin text-flame-500" />
+              </div>
+            ) : (
+              <>
                 {featuredProducts.map((product) => (
                   <ProductCard 
                     key={product.id} 
                     product={product} 
-                    onAddToCart={() => handleAddToCart(product)} 
+                    onAddToCart={handleAddToCart} 
                   />
                 ))}
-                {featuredProducts.length === 0 && (
-                  <div className="col-span-2 text-center py-8 text-muted-foreground">
-                    Tidak ada produk unggulan
-                  </div>
-                )}
-              </div>
+              </>
             )}
           </div>
-        
+        </div>
 
-        {/* Categories */}
-        <div className="mb-8">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">Kategori</h2>
-              <Link to="/search?category=true" className="text-flame-500 text-sm">
-                Lihat Semua
-              </Link>
-            </div>
-            
-            {loading ? (
-              <div className="flex justify-center items-center h-32">
-                <Loader2 className="h-8 w-8 animate-spin text-flame-500" />
+        {/* Discounted Products */}
+        <div className="space-y-4 mb-6">
+          <h2 className="text-lg font-semibold">Produk Diskon</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {isLoading ? (
+              <div className="flex justify-center items-center h-24">
+                <Loader2 className="h-6 w-6 animate-spin text-flame-500" />
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-4">
-                {categories.map((category) => (
-                  <Card 
-                    key={category.id} 
-                    className="overflow-hidden cursor-pointer hover:bg-muted/50 transition-colors"
-                    onClick={() => navigate(`/category/${category.id}`)}
-                  >
-                    <CardContent className="p-3 flex flex-col items-center justify-center">
-                      <Icons.package className="h-8 w-8 mb-2 text-primary" />
-                      <span className="text-xs text-center">{category.name}</span>
-                    </CardContent>
-                  </Card>
-                ))}
-                {categories.length === 0 && (
-                  <div className="col-span-2 text-center py-8 text-muted-foreground">
-                    Tidak ada kategori
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        
-
-        {/* Special Offers */}
-        <div className="mb-8">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-bold">Penawaran Khusus</h2>
-              <Link to="/search?discount=true" className="text-flame-500 text-sm">
-                Lihat Semua
-              </Link>
-            </div>
-            
-            {loading ? (
-              <div className="flex justify-center items-center h-32">
-                <Loader2 className="h-8 w-8 animate-spin text-flame-500" />
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-4">
+              <>
                 {discountedProducts.map((product) => (
                   <ProductCard 
                     key={product.id} 
                     product={product} 
-                    onAddToCart={() => handleAddToCart(product)} 
+                    onAddToCart={handleAddToCart} 
                   />
                 ))}
-                {discountedProducts.length === 0 && (
-                  <div className="col-span-2 text-center py-8 text-muted-foreground">
-                    Tidak ada produk dengan diskon
-                  </div>
-                )}
-              </div>
+              </>
             )}
           </div>
+        </div>
+
+        {/* Categories */}
+        <div className="mb-8">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold">Kategori</h2>
+            <Link to="/search?category=true" className="text-flame-500 text-sm">
+              Lihat Semua
+            </Link>
+          </div>
+          
+          {isLoading ? (
+            <div className="flex justify-center items-center h-32">
+              <Loader2 className="h-8 w-8 animate-spin text-flame-500" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              {categories.map((category) => (
+                <Card 
+                  key={category.id} 
+                  className="overflow-hidden cursor-pointer hover:bg-muted/50 transition-colors"
+                  onClick={() => navigate(`/category/${category.id}`)}
+                >
+                  <CardContent className="p-3 flex flex-col items-center justify-center">
+                    <Icons.package className="h-8 w-8 mb-2 text-primary" />
+                    <span className="text-xs text-center">{category.name}</span>
+                  </CardContent>
+                </Card>
+              ))}
+              {categories.length === 0 && (
+                <div className="text-center py-4">
+                  <p className="text-sm text-muted-foreground">
+                    Tidak ada kategori yang tersedia
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </MobileLayout>
   );
@@ -233,54 +285,48 @@ const Index = () => {
 
 type ProductCardProps = {
   product: Product;
-  onAddToCart: () => void;
+  onAddToCart: (product: Product) => void;
 };
 
-const ProductCard = ({ product, onAddToCart }: ProductCardProps) => {
+const ProductCard: React.FC<ProductCardProps> = ({ product, onAddToCart }) => {
   return (
-    <Card className="overflow-hidden border-none shadow-sm">
-      <Link to={`/product/${product.id}`}>
-        <div className="h-32 bg-charcoal-100 relative">
-          <img
-            src={product.images && product.images.length > 0 ? product.images[0] : '/placeholder.svg'}
-            alt={product.name}
-            className="h-full w-full object-cover"
-          />
-          {product.discount && (
-            <span className="absolute top-2 right-2 bg-flame-500 text-white text-xs px-2 py-1 rounded-full">
-              {product.discount}% OFF
-            </span>
-          )}
-        </div>
-      </Link>
+    <Card className="overflow-hidden">
       <CardContent className="p-3">
-        <div className="mb-2">
-          <span className="text-xs text-muted-foreground">{product.type}</span>
-          <Link to={`/product/${product.id}`}>
-            <h3 className="font-medium text-sm line-clamp-1">{product.name}</h3>
-          </Link>
-        </div>
-        <div className="flex justify-between items-center">
-          <div>
+        <div className="flex flex-col space-y-2">
+          {product.images && product.images.length > 0 ? (
+            <img 
+              src={product.images[0]} 
+              alt={product.name} 
+              className="w-full h-32 object-cover rounded-lg"
+            />
+          ) : (
+            <div className="w-full h-32 bg-gray-100 rounded-lg flex items-center justify-center">
+              <Icons.package className="h-8 w-8 text-gray-400" />
+            </div>
+          )}
+          <div className="flex flex-col space-y-1">
+            <h3 className="font-medium text-sm">{product.name}</h3>
             {product.discount ? (
-              <div className="flex items-center gap-1">
-                <span className="font-bold text-sm">
+              <div className="flex items-center space-x-2">
+                <span className="font-medium text-sm text-primary">
                   {formatRupiah(product.price * (1 - product.discount / 100))}
                 </span>
-                <span className="text-muted-foreground text-xs line-through">
+                <span className="text-xs text-gray-500 line-through">
                   {formatRupiah(product.price)}
                 </span>
               </div>
             ) : (
-              <span className="font-bold text-sm">{formatRupiah(product.price)}</span>
+              <span className="font-medium text-sm">
+                {formatRupiah(product.price)}
+              </span>
             )}
           </div>
-          <Button
-            size="icon"
-            className="h-8 w-8 rounded-full bg-flame-500 hover:bg-flame-600"
-            onClick={onAddToCart}
+          <Button 
+            size="sm" 
+            className="w-full" 
+            onClick={() => onAddToCart(product)}
           >
-            <ShoppingCart className="h-4 w-4" />
+            Tambah ke Keranjang
           </Button>
         </div>
       </CardContent>

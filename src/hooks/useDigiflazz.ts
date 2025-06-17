@@ -57,6 +57,13 @@ export function useDigiflazz() {
     try {
       setLoading(true);
       setError(null);
+      // Ensure all required fields are included in the request
+      const refId = generateRefId();
+      const username = config.digiflazz.username;
+      const apiKey = config.digiflazz.apiKey;
+      // Note: We would calculate sign here if we had an MD5 function available
+      // For now, we'll log a warning if this might be an issue
+      console.log("Sending Digiflazz transaction with username:", username, "and refId:", refId);
       const result = await digiflazzService.topupPrepaid(customerNo, skuCode, testing);
       setCurrentTransaction(result);
       return result;

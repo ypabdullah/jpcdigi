@@ -5,20 +5,53 @@ import { MobileLayout } from "@/components/layout/MobileLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Icons } from "@/components/Icons";
-import { Badge } from "@/components/ui/badge";
+import { format } from 'date-fns';
+import { id } from 'date-fns/locale';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'react-hot-toast';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { PPOBNotifications } from "@/components/ppob/PPOBNotifications";
 import { formatRupiah } from "@/lib/utils";
-import { format } from "date-fns";
-import { id } from "date-fns/locale";
-import { supabase } from "@/integrations/supabase/client";
+import { Badge } from "@/components/ui/badge";
 import type { Profile } from "@/integrations/supabase/custom-types";
+import CryptoJS from 'crypto-js';
+
+interface Category {
+  category_id: string;
+  name: string;
+  category_name?: string;
+}
+
+interface Product {
+  product_id: string;
+  name: string;
+  product_name?: string;
+  description: string;
+  price: number;
+  original_price?: number;
+  discount?: number;
+  category: string;
+  category_id: string;
+}
+
+const generateSignature = (username: string, apiKey: string, value: string) => {
+  return CryptoJS.MD5(username + apiKey + value).toString();
+};
 
 export default function PPOBDashboard() {
   const navigate = useNavigate();
   const [userProfile, setUserProfile] = useState<Profile | null>(null);
-  const [balance, setBalance] = useState(0); // Will be fetched from Supabase
-  const [notificationCount, setNotificationCount] = useState(0); // Will be fetched
+  const [balance, setBalance] = useState(0);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isTestPurchaseOpen, setIsTestPurchaseOpen] = useState(false);
+  const [isFetching, setIsFetching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [customerNo, setCustomerNo] = useState('');
+  const [testPurchaseResult, setTestPurchaseResult] = useState<any>(null);
+  const [notificationCount, setNotificationCount] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isLoading, setIsLoading] = useState(true);
 
@@ -50,11 +83,15 @@ export default function PPOBDashboard() {
             .eq('read_status', false);
           if (notifError) throw notifError;
           if (count !== null) setNotificationCount(count);
+
+          // Initialize Digiflazz data
+          await initializeDigiflazz();
         } else {
           navigate('/login');
         }
       } catch (error) {
         console.error('Error fetching data:', error);
+        toast.error('Gagal mengambil data pengguna: ' + error.message);
       } finally {
         setIsLoading(false);
       }
@@ -71,6 +108,194 @@ export default function PPOBDashboard() {
       clearInterval(timeInterval);
     };
   }, [navigate]);
+
+  const handleTestPurchase = async () => {
+    if (!selectedProduct || !customerNo) {
+      toast.error('Harap pilih produk dan masukkan nomor pelanggan terlebih dahulu');
+      return;
+    }
+
+    try {
+      setIsFetching(true);
+      setError(null);
+
+      // Generate signature for test purchase
+      const sign = generateSignature(
+        import.meta.env.VITE_DIGIFLAZZ_USERNAME,
+        import.meta.env.VITE_DIGIFLAZZ_API_KEY,
+        `${selectedProduct.product_id}-${customerNo}`
+      );
+
+      const response = await fetch('/api/digiflazz-proxy/v1/transaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: import.meta.env.VITE_DIGIFLAZZ_USERNAME,
+          cmd: 'buy',
+          product_id: selectedProduct.product_id,
+          customer_no: customerNo,
+          price: selectedProduct.price,
+          sign: sign
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('Test purchase result:', result);
+      
+      if (result.status === 'success') {
+        setTestPurchaseResult(result);
+        toast.success('Transaksi berhasil!');
+        // Save to Supabase
+        await saveTransactionToSupabase(result);
+      } else {
+        throw new Error(result.message || 'Transaksi gagal');
+      }
+    } catch (error) {
+      console.error('Error in test purchase:', error);
+      setError(error.message);
+      toast.error('Gagal melakukan transaksi: ' + error.message);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  const saveTransactionToSupabase = async (transaction: any) => {
+    try {
+      const { error } = await supabase
+        .from('transaksi_digiflazz')
+        .insert([{
+          ref_id: transaction.data?.ref_id,
+          customer_no: customerNo,
+          buyer_sku_code: selectedProduct?.product_id,
+          status: transaction.status,
+          message: transaction.message,
+          rc: transaction.data?.rc,
+          sn: transaction.data?.sn,
+          price: selectedProduct?.price,
+          buyer_last_saldo: transaction.data?.buyer_last_saldo,
+          tele: transaction.data?.tele,
+          wa: transaction.data?.wa,
+          transaction_date: new Date().toISOString()
+        }]);
+
+      if (error) throw error;
+    } catch (error) {
+      console.error('Error saving transaction to Supabase:', error);
+      // Don't throw error here as we want to show the transaction result to user
+    }
+  };
+
+  const initializeDigiflazz = async () => {
+    try {
+      setIsFetching(true);
+      setError(null);
+
+      // Generate signature for category list
+      const sign = generateSignature(
+        import.meta.env.VITE_DIGIFLAZZ_USERNAME,
+        import.meta.env.VITE_DIGIFLAZZ_API_KEY,
+        'category-list'
+      );
+
+      const response = await fetch('/api/v1/service-list', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'username': import.meta.env.VITE_DIGIFLAZZ_USERNAME,
+          'apiKey': import.meta.env.VITE_DIGIFLAZZ_API_KEY
+        },
+        body: JSON.stringify({
+          cmd: 'category-list',
+          username: import.meta.env.VITE_DIGIFLAZZ_USERNAME,
+          sign
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('Categories response:', result);
+      
+      if (result.status === 'success' && result.data && Array.isArray(result.data)) {
+        const transformedCategories = result.data.map(category => ({
+          ...category,
+          category_id: category.category_id || category.id
+        }));
+        setCategories(transformedCategories);
+      } else {
+        console.error('Invalid response format:', result);
+        throw new Error(result.message || 'Invalid response format from Digiflazz API');
+      }
+    } catch (error) {
+      console.error('Error initializing Digiflazz:', error);
+      setError(error.message);
+      toast.error('Gagal mengambil kategori: ' + error.message);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  const fetchProducts = async (categoryId: string) => {
+    try {
+      setIsFetching(true);
+      setError(null);
+
+      // Generate signature for product list request
+      const sign = generateSignature(
+        import.meta.env.VITE_DIGIFLAZZ_USERNAME,
+        import.meta.env.VITE_DIGIFLAZZ_API_KEY,
+        `pricelist-${categoryId}`
+      );
+
+      const response = await fetch('/api/digiflazz-proxy/v1/price-list', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          cmd: 'pricelist',
+          category_id: categoryId,
+          username: import.meta.env.VITE_DIGIFLAZZ_USERNAME,
+          sign: sign
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! Status: ${response.status}, Details: ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log('Products response:', result);
+      
+      if (result.status === 'success' && result.data && Array.isArray(result.data)) {
+        const transformedProducts = result.data.map(product => ({
+          ...product,
+          category_id: product.category_id || categoryId,
+          category: product.category || categories.find(c => c.category_id === categoryId)?.name || 'Lainnya'
+        }));
+        setProducts(transformedProducts);
+      } else {
+        throw new Error(result.message || 'Invalid response format');
+      }
+    } catch (error) {
+      console.error('Error fetching products:', error);
+      setError(error.message);
+      toast.error('Gagal mengambil produk: ' + error.message);
+    } finally {
+      setIsFetching(false);
+    }
+  };
 
   return (
     <MobileLayout>
@@ -114,8 +339,6 @@ export default function PPOBDashboard() {
           `}
         </style>
       </Helmet>
-
-
 
       {/* Header with status bar and balance */}
       <div className="bg-gradient-to-r from-blue-600 via-indigo-500 to-purple-500 text-white" style={{animation: "gradientShift 8s ease infinite"}}>
@@ -254,10 +477,74 @@ export default function PPOBDashboard() {
           </div>
         </div>
 
+        {/* Categories section */}
+        <div className="space-y-4 mb-8">
+          <h2 className="text-lg font-semibold mb-2">Kategori Layanan</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            {categories.map((category) => (
+              <div
+                key={category.category_id}
+                className="flex flex-col items-center cursor-pointer"
+                onClick={() => {
+                  setSelectedCategory(category.category_id);
+                  fetchProducts(category.category_id);
+                }}
+              >
+                <div className="w-20 h-20 rounded-xl bg-gradient-to-br from-blue-100 to-blue-200 flex items-center justify-center mb-2 shadow-md hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
+                  <Icons.menu className="h-8 w-8 text-blue-600 pulse" />
+                </div>
+                <span className="text-xs font-medium">{category.name || category.category_name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Products section when category is selected */}
+        {selectedCategory && (
+          <div className="mt-6">
+            <h3 className="text-lg font-semibold mb-4">Produk {categories.find(c => c.category_id === selectedCategory)?.name || 'Semua'}</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {products.map((product) => (
+                <div key={product.product_id} className="bg-white rounded-lg shadow-sm overflow-hidden">
+                  <div className="p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="font-medium text-lg">{product.name || product.product_name}</h4>
+                        <p className="text-sm text-gray-600 mt-1">{product.description}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-bold text-blue-600">Rp{formatRupiah(product.price || 0)}</p>
+                      </div>
+                    </div>
+                    
+                    <div className="mt-4 space-y-2">
+                      <Button
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                        onClick={() => {
+                          setSelectedProduct(product);
+                          setIsTestPurchaseOpen(true);
+                        }}
+                      >
+                        <Icons.refreshCw className="h-4 w-4 mr-2" />
+                        Test Pembelian
+                      </Button>
+                      <Button
+                        className="w-full bg-green-600 hover:bg-green-700 text-white"
+                        onClick={() => navigate(`/ppob/purchase/${product.product_id}`, { state: { product } })}
+                      >
+                        <Icons.creditCard className="h-4 w-4 mr-2" />
+                        Beli Sekarang
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Services section */}
         <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 sm:gap-6 mb-8" style={{perspective: "1000px"}}>
-          {/* Wallet item removed */}
-          
           <div className="flex flex-col items-center" onClick={() => navigate("/ppob/ewallet")}>
             <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-green-100 to-green-200 flex items-center justify-center mb-1 shadow-md hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1">
               <Icons.wallet className="h-7 w-7 text-green-600 pulse" />
